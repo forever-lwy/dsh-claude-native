@@ -39,11 +39,15 @@ DeepSeek Harness（dsh）`0.2.1-rc.5` 的 Anthropic Claude 原生供应商插件
 - **错误**：`prompt is too long` → `CONTEXT_WINDOW_EXCEEDED`（触发 dsh 压缩）；429 → `RATE_LIMIT`（带 retry-after）；5xx / 529 / 流内 overloaded → `SERVER`；连接失败 → `TRANSPORT`；这些可由 dsh-llm-retry 重试。错误信息附带上游的错误类型与说明（不含密钥），便于排查中转站问题。
 - **模型发现**：“从上游获取模型”调用 `GET /v1/models`，读取 `max_input_tokens`、`max_tokens` 与 thinking / effort / 图片 / PDF 能力树。
 - **采样参数**：当前模型拒绝 `temperature`；只对声明了 `sampling` 的旧模型且思考关闭时转发。
+- **对话框中的原生能力开关**：聊天输入框左侧的 **原生能力** 按钮（与 Gemini 插件一致），按“会话 + 模型”保存，发送后的提示会记录当时的选择：
+  - **文件使用模型原生能力**：新上传的 PDF 作为原生 `document` 块发送；同时向模型提供 `claude_native_attach_file` 工具，可把工作区内的 PDF 或 PNG/JPEG/GIF/WebP 图片原样附加到当前对话（按文件头识别类型，不解析、不 OCR；PDF ≤ 20 MiB、图片 ≤ 10 MiB，仅限会话工作区）。关闭后 PDF 走本地路径与文件工具，工具也从模型可见列表中移除。之前发送的文件保留原来的方式。
+  - **网页搜索 / 网页读取**：覆盖模型页的默认值；仅对“网页工具”不为“无”的模型显示。关闭后，历史中的服务端工具块退化为普通文本再发送。
+  - 回复进行中不可修改；保存期间会暂时阻止发送，保证下一条提示使用新选择。
 - **宿主插件 API**：`await ctx.nativeClaude.client()` 返回按当前配置构造的官方 SDK 客户端（batches、count_tokens、files 等）。
 
 ## 安装与测试
 
-按部署约定，不自动安装。构建好的版本包位于宿主机 `plugins/releases/dsh-claude-native-<版本>.tgz`。在 dsh 的 **插件 → 添加插件** 中输入容器路径（例如 `/plugins/releases/dsh-claude-native-0.1.0.tgz`）并确认安装。之后每个版本使用新的版本号和文件名。
+按部署约定，不自动安装。构建好的版本包位于宿主机 `plugins/releases/dsh-claude-native-<版本>.tgz`。在 dsh 的 **插件 → 添加插件** 中输入容器路径（例如 `/plugins/releases/dsh-claude-native-0.2.0.tgz`）并确认安装。之后每个版本使用新的版本号和文件名。
 
 安装后在 **设置 → 模型** 找到 **Claude（原生）**，点击 **配置 Claude 提供商**：
 
@@ -57,7 +61,8 @@ YAML 示例：[中转站](examples/relay.yaml)、[进阶字段](examples/advance
 
 ## 已知限制
 
-- 未接入：代码执行服务端工具、Files API 上传、mid-conversation system messages（dsh 未声明 in-history 更新时会把系统提示整体放在顶层）、服务端 compaction、按会话切换网页工具的聊天栏开关。
+- 未接入：代码执行服务端工具（Anthropic 建议不要与动态过滤版网页工具同时声明）、Files API 上传、mid-conversation system messages（dsh 未声明 in-history 更新时会把系统提示整体放在顶层）、服务端 compaction。
+- `claude_native_attach_file` 不出现在 PTC（`run_code`）SDK 中：嵌套调用的结果无法携带原生文件。
 - 非 PDF 文件仍按 dsh 默认方式提供本地路径，由模型用文件工具读取。
 - rc.5 模型页没有供应商编辑器覆盖插槽：插件用 CSS 隐藏 Claude 卡片上宿主无法使用的“编辑”按钮。宿主类名属于 rc.5，升级 dsh 后需重新核对。
 - 使用 `anthropic-version: 2023-06-01`（SDK 0.x 默认）。可在设置中改为 `2026-10-21`；该版本拒绝所有 `temperature`，插件默认也不发送。
@@ -71,4 +76,4 @@ npm run build   # tsc + 浏览器端 lib/client.js
 npm test        # 协议、rc.5 运行时、设置持久化与 jsdom 界面测试
 ```
 
-源码：`src/config.ts`（配置与预设）、`src/request.ts`（请求构造）、`src/messages.ts`（历史转换与回放）、`src/stream.ts`（流转换）、`src/adapter.ts`、`src/provider-settings.ts`（模型页 Remote）、`src/client/`（界面）。
+源码：`src/config.ts`（配置与预设）、`src/request.ts`（请求构造）、`src/messages.ts`（历史转换与回放）、`src/stream.ts`（流转换）、`src/adapter.ts`、`src/provider-settings.ts`（模型页 Remote）、`src/chat-controls.ts` / `src/capabilities.ts`（对话框开关与提示记录）、`src/native-file-tool.ts`（原生附加工具）、`src/client/`（界面）。

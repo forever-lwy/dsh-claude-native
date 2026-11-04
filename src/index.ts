@@ -9,11 +9,15 @@ import { discoverClaudeModels } from './discovery.js'
 import { registerNativeFileBridge } from './file-scope.js'
 import { registerClaudeSettings } from './provider-settings.js'
 import { ClaudeNativeService } from './service.js'
+import { registerClaudeChatControls, type ClaudeChatControls } from './chat-controls.js'
+import { registerNativeFileTool } from './native-file-tool.js'
 
 export { Config, CLAUDE_PROVIDER, DEFAULT_MODELS, MODEL_PRESETS, defaultProfile, presetModel, profileOf, validateProfile } from './config.js'
 export type { ClaudeEffortOption, ClaudeModelConfig, ClaudeProfile, ClaudeProfileOptions } from './config.js'
 export { ClaudeNativeAdapter } from './adapter.js'
 export { ClaudeNativeService } from './service.js'
+export { CLAUDE_NATIVE_FILE_TOOL } from './native-file-tool.js'
+export type { ClaudeChatChoices } from './chat-remote.js'
 
 export const name = 'dsh-claude-native'
 export const inject = ['llm', 'attachments']
@@ -31,6 +35,14 @@ export function apply(ctx: Context, config: Config): void {
   }])
   registerNativeFileBridge(ctx)
   new ClaudeNativeService(ctx, adapter)
+  let controls: ClaudeChatControls | undefined
+  ctx.inject(['sessionProjections', 'sessionController', 'sessions', 'typert'], chatCtx => {
+    controls = registerClaudeChatControls(chatCtx, profile)
+    chatCtx.effect(() => () => { controls = undefined })
+  })
+  ctx.inject(['tools', 'fs', 'workingDirectory', 'systemPrompt'], toolCtx => {
+    registerNativeFileTool(toolCtx, { profile, choices: (session, model) => controls?.choicesFor(session, model) })
+  })
   ctx.inject(['settings', 'typert', 'credentials'], settingsCtx => {
     registerClaudeSettings(settingsCtx, {
       settingsNs, profile,

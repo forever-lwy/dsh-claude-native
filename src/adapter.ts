@@ -13,6 +13,8 @@ import { claudeImageTarget, isPdf, translateMessages } from './messages.js'
 import { buildRequest, findModel, replayPolicy } from './request.js'
 import { TurnAccumulator } from './stream.js'
 import { restoreNativeFiles } from './file-scope.js'
+import { latestChatChoices, usesNativeFiles } from './capabilities.js'
+import { attachToolResults } from './native-file-tool.js'
 
 export interface ClaudeAdapterOptions {
   profile: () => ClaudeProfile
@@ -87,12 +89,16 @@ export class ClaudeNativeAdapter extends LlmAdapter {
       const model = findModel(profile, projected.model)
       const inputTypes = model?.inputTypes
       const pdf = inputTypes === undefined || inputTypes.includes('pdf')
-      const options = pdf ? restoreNativeFiles(projected, block => block.type === 'file' && isPdf(block.attachment)) : projected
+      // The newest human prompt's stamp decides this turn's switches; each file keeps its own prompt's mode.
+      const choices = latestChatChoices(projected)
+      const attached = attachToolResults(projected)
+      const options = pdf ? restoreNativeFiles(projected, (block, source) => block.type === 'file' && isPdf(block.attachment)
+        && (source.role === 'tool' && attached.has(source.toolCallId) || usesNativeFiles(source, projected))) : projected
       const client = bound ?? await this.client(profile)
       const conversation = await translateMessages(options, {
-        attachments: this.ctx.get('attachments'), inputTypes, policy: replayPolicy(profile, model),
+        attachments: this.ctx.get('attachments'), inputTypes, policy: replayPolicy(profile, model, choices),
       })
-      const { params } = buildRequest(profile, options, conversation)
+      const { params } = buildRequest(profile, options, conversation, choices)
       const turn = new TurnAccumulator(options)
       const continued: Anthropic.Beta.BetaContentBlock[] = []
       let outcome

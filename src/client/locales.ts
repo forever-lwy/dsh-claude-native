@@ -78,3 +78,27 @@ export const en: Record<LocaleKey, string> = {
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap { claudeProviderSettings: LocaleKey }
 }
+
+export const chatZh = {
+  title: '原生能力', dialogLabel: 'Claude 原生能力', scope: '适用于当前会话与模型',
+  nativeFiles: '文件使用模型原生能力',
+  nativeFilesHint: '新上传的 PDF 直接作为原生文档交给 Claude 读取（含扫描页、图表），模型也可用 claude_native_attach_file 附加工作区中的 PDF 或图片；关闭后通过文件路径和本地工具处理。此前的文件保留原来的方式。',
+  tools: '服务端工具', webSearch: '网页搜索', webFetch: '网页读取',
+  toolsHint: '由 Anthropic 执行并按次计费；中转站可能不支持。',
+  saving: '正在保存原生选项…', error: '原生选项加载或保存失败。', retry: '重试',
+  busy: '本次提交结束后可修改', readOnly: '仅可查看', close: '关闭',
+}
+export type ChatLocaleKey = keyof typeof chatZh
+export const chatEn: Record<ChatLocaleKey, string> = {
+  title: 'Native capabilities', dialogLabel: 'Claude native capabilities', scope: 'Applies to this conversation and model',
+  nativeFiles: 'Use native file input',
+  nativeFilesHint: 'New PDF uploads go to Claude as native documents (scans and charts included), and the model may attach workspace PDFs or images with claude_native_attach_file. Turn off to use file paths and local tools. Earlier files keep their mode.',
+  tools: 'Server tools', webSearch: 'Web search', webFetch: 'Web fetch',
+  toolsHint: 'Run and billed by Anthropic; gateways may not support them.',
+  saving: 'Saving native options…', error: 'Could not load or save native options.', retry: 'Retry',
+  busy: 'Available after the current submission finishes', readOnly: 'View only', close: 'Close',
+}
+
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface LocaleNamespaceMap { claudeNative: ChatLocaleKey }
+}

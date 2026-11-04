@@ -2,6 +2,7 @@ import { LlmError, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import type Anthropic from '@anthropic-ai/sdk'
 import { isOfficialEndpoint, type ClaudeEffortOption, type ClaudeModelConfig, type ClaudeProfile } from './config.js'
 import { markCacheBreakpoint, type ReplayPolicy, type TranslatedConversation } from './messages.js'
+import type { ClaudeChatChoices } from './chat-remote.js'
 
 export type StreamParams = Anthropic.Beta.MessageCreateParamsStreaming
 type Tool = NonNullable<StreamParams['tools']>[number]
@@ -26,15 +27,19 @@ export function selectedEffort(model: ClaudeModelConfig | undefined, requested: 
   return option
 }
 
-/** Which server tools this request declares; replayed history may only echo their blocks. */
-export function replayPolicy(profile: ClaudeProfile, model: ClaudeModelConfig | undefined): ReplayPolicy {
-  const webTools = model?.webTools ?? 'none'
-  const serverTools = new Set<string>()
-  if (webTools !== 'none') {
-    if (profile.webSearch.enabled) serverTools.add('web_search')
-    if (profile.webFetch.enabled) serverTools.add('web_fetch')
+/** Conversation switches override the provider defaults; a model without web tools never gets them. */
+function webEnabled(profile: ClaudeProfile, model: ClaudeModelConfig | undefined, choices: ClaudeChatChoices | undefined) {
+  const available = (model?.webTools ?? 'none') !== 'none'
+  return {
+    web_search: available && (choices ? choices.webSearch : profile.webSearch.enabled),
+    web_fetch: available && (choices ? choices.webFetch : profile.webFetch.enabled),
   }
-  return { serverTools, fallbacks: fallbacksEnabled(profile, model) }
+}
+
+/** Which server tools this request declares; replayed history may only echo their blocks. */
+export function replayPolicy(profile: ClaudeProfile, model: ClaudeModelConfig | undefined, choices?: ClaudeChatChoices): ReplayPolicy {
+  const enabled = webEnabled(profile, model, choices)
+  return { serverTools: new Set(Object.keys(enabled).filter(key => enabled[key as keyof typeof enabled])), fallbacks: fallbacksEnabled(profile, model) }
 }
 
 export function fallbacksEnabled(profile: ClaudeProfile, model: ClaudeModelConfig | undefined): boolean {
@@ -43,21 +48,22 @@ export function fallbacksEnabled(profile: ClaudeProfile, model: ClaudeModelConfi
   return model?.fallback === true && isOfficialEndpoint(profile)
 }
 
-function serverTools(profile: ClaudeProfile, model: ClaudeModelConfig | undefined): Tool[] {
+function serverTools(profile: ClaudeProfile, model: ClaudeModelConfig | undefined, choices: ClaudeChatChoices | undefined): Tool[] {
   const generation = model?.webTools ?? 'none'
   if (generation === 'none') return []
   const types = WEB_TOOL_TYPES[generation]
+  const enabled = webEnabled(profile, model, choices)
   const tools: Tool[] = []
-  if (profile.webSearch.enabled) tools.push({ type: types.web_search, name: 'web_search',
+  if (enabled.web_search) tools.push({ type: types.web_search, name: 'web_search',
     ...(profile.webSearch.maxUses ? { max_uses: profile.webSearch.maxUses } : {}) } as Tool)
-  if (profile.webFetch.enabled) tools.push({ type: types.web_fetch, name: 'web_fetch',
+  if (enabled.web_fetch) tools.push({ type: types.web_fetch, name: 'web_fetch',
     ...(profile.webFetch.maxUses ? { max_uses: profile.webFetch.maxUses } : {}) } as Tool)
   return tools
 }
 
 export interface BuiltRequest { params: StreamParams; thinkingOn: boolean }
 
-export function buildRequest(profile: ClaudeProfile, options: GenerateOptions, conversation: TranslatedConversation): BuiltRequest {
+export function buildRequest(profile: ClaudeProfile, options: GenerateOptions, conversation: TranslatedConversation, choices?: ClaudeChatChoices): BuiltRequest {
   const model = findModel(profile, options.model)
   const option = selectedEffort(model, options.reasoningEffort)
   if (options.stop?.some(stop => !stop.trim())) throw new LlmError('停止序列不得为空白。', 'UNSUPPORTED_OPTION')
@@ -104,7 +110,7 @@ export function buildRequest(profile: ClaudeProfile, options: GenerateOptions, c
     // Core sends the complete tool list (no in-history tool updates), so nothing is deferred.
     input_schema: { type: 'object', ...structuredClone(tool.parameters) } as Anthropic.Beta.BetaTool.InputSchema,
   }))
-  tools.push(...serverTools(profile, model))
+  tools.push(...serverTools(profile, model, choices))
   if (tools.length) {
     if (cacheControl) {
       (tools.at(-1) as { cache_control?: unknown }).cache_control = cacheControl

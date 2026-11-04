@@ -38,7 +38,7 @@ export async function* withOriginalRequest(options: GenerateOptions, next: () =>
  * local-path note (kept so file tools still know where the file lives).
  * Messages are matched by stable id, or by order for anonymous inputs.
  */
-export function restoreNativeFiles(options: GenerateOptions, native: (block: ContentBlock) => boolean): GenerateOptions {
+export function restoreNativeFiles(options: GenerateOptions, native: (block: ContentBlock, source: RequestMessage) => boolean): GenerateOptions {
   const original = originals.getStore()
   if (original === undefined || original.provider !== options.provider || original.model !== options.model || original.sessionId !== options.sessionId) return options
   const byId = new Map(original.messages.filter(message => message.id !== undefined).map(message => [message.id, message]))
@@ -48,10 +48,10 @@ export function restoreNativeFiles(options: GenerateOptions, native: (block: Con
   const messages = options.messages.map((projected): RequestMessage => {
     const source = projected.id === undefined ? anonymous[anonymousIndex++] : byId.get(projected.id)
     if (source === undefined || source.role === 'assistant' || source.role !== projected.role
-      || source.content.length !== projected.content.length || !source.content.some(native)) return projected
+      || source.content.length !== projected.content.length || !source.content.some(block => native(block, source))) return projected
     const content = projected.content.flatMap((block, index) => {
       const originalBlock = source.content[index]
-      if (block.type === 'file' || !native(originalBlock)) return [block]
+      if (block.type === 'file' || !native(originalBlock, source)) return [block]
       const hint = block.type === 'text'
         ? { ...block, text: `${block.text}\nThe original file is also attached natively below; the local path above is for file tools only.` } : block
       return [hint, originalBlock]

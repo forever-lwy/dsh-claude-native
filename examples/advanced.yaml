@@ -1,0 +1,40 @@
+# 模型页不编辑的进阶字段：附加请求头、逐模型 beta 与原生请求体字段。
+# 这些字段在界面保存时保留不变。
+- id: dsh-claude-native
+  name: dsh-claude-native
+  config:
+    claude:
+      headers:
+        x-relay-route: claude
+      betas:
+        - context-management-2025-06-27
+      extraBody:
+        context_management:
+          edits:
+            - type: clear_tool_uses_20250919
+      webSearch:
+        enabled: true
+        maxUses: 5
+      models:
+        - id: claude-opus-5-5
+          name: Claude Opus 5.5（快速）
+          betas: [fast-mode-2026-02-01]
+          extraBody:
+            speed: fast                          # 仅官方 API，按 2 倍价格计费
+        - id: claude-fable-5-1
+          thinkingDisplay: updates               # 工具调用之间的进度说明（beta，会自动加头）
+          extraBody:
+            output_config:
+              task_budget: { type: tokens, total: 200000 }
+          betas: [task-budgets-2026-03-13]
+        - id: my-custom-claude
+          name: 自定义 Claude 部署
+          contextWindow: 400000
+          maxTokens: 64000
+          inputTypes: [text, image]
+          efforts:
+            - { id: low, name: 低, thinking: adaptive, effort: low }
+            - { id: high, name: 高, thinking: adaptive, effort: high }
+          defaultEffort: high
+          thinkingDisplay: summarized
+          webTools: none

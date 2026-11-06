@@ -1,0 +1,11 @@
+import type { Context } from '@deepseek-ai/cordis';
+import { Config } from './config.js';
+export { Config, CLAUDE_PROVIDER, DEFAULT_MODELS, MODEL_PRESETS, defaultProfile, presetModel, profileOf, validateProfile } from './config.js';
+export type { ClaudeEffortOption, ClaudeModelConfig, ClaudeProfile, ClaudeProfileOptions } from './config.js';
+export { ClaudeNativeAdapter } from './adapter.js';
+export { ClaudeNativeService } from './service.js';
+export { CLAUDE_NATIVE_FILE_TOOL } from './native-file-tool.js';
+export type { ClaudeChatChoices } from './chat-remote.js';
+export declare const name = "dsh-claude-native";
+export declare const inject: string[];
+export declare function apply(ctx: Context, config: Config): void;

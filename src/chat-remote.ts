@@ -34,7 +34,7 @@ const parameter = (schema: z.ZodType, symbol: string) => ({
 })
 
 export const chatRemoteInfo = createTypertRemoteInfo({
-  package: 'dsh-claude-native',
+  package: '@forever-lwy/dsh-claude-native',
   methods: {
     'nativeClaudeChat/get': {
       service: 'nativeClaudeChat', invocation: { kind: 'direct' },

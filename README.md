@@ -45,9 +45,19 @@ DeepSeek Harness（dsh）的 Anthropic Claude 原生供应商插件。直接用�
   - 回复进行中不可修改；保存期间会暂时阻止发送，保证下一条提示使用新选择。
 - **宿主插件 API**：`await ctx.nativeClaude.client()` 返回按当前配置构造的官方 SDK 客户端（batches、count_tokens、files 等）。
 
-## 安装与测试
+## 安装
 
-按部署约定，不自动安装。构建好的版本包位于宿主机 `plugins/releases/dsh-claude-native-<版本>.tgz`。在 dsh 的 **插件 → 添加插件** 中输入容器路径（例如 `/plugins/releases/dsh-claude-native-0.2.1.tgz`）并确认安装。之后每个版本使用新的版本号和文件名。
+在 DSH「插件 → 添加插件」输入下面的来源，确认安装并启用：
+
+```text
+github:forever-lwy/dsh-claude-native
+```
+
+仓库默认分支是 `release`，其中每个提交都是某次发版的源码加上构建好的 `lib/`，并去掉了 `prepare`，所以安装时不装 devDependencies、不构建。dshmarket 按默认分支上 `package.json` 的版本号判断是否有更新，点击更新时安装 `release` 的最新提交。不要安装 `master`：它只有源码，安装时会靠 `prepare` 拉全部 devDependencies 现场构建。
+
+包名自 0.2.2 起为 `@forever-lwy/dsh-claude-native`，以免与 npm 和插件市场目录里的同名插件混淆。从旧的 `dsh-claude-native` 版本包迁移时，先卸载旧的 `dsh-claude-native`，再安装上面的来源；两者注册同一宿主行，不能同时安装。宿主行 id 和设置命名空间不变。
+
+设置保存在 profile `cordis.patch.yml` 的 `dsh-claude-native` 行。迁移时若该行写有 `name: dsh-claude-native`，在卸载旧包后、安装新包前改成 `name: '@forever-lwy/dsh-claude-native'`，设置即保留；不改则 dsh 以 name mismatch 跳过整行。API Key 在凭据存储中，不受影响。
 
 安装后在 **设置 → 模型** 找到 **Claude（原生）**，点击 **配置 Claude 提供商**：
 
@@ -58,6 +68,8 @@ DeepSeek Harness（dsh）的 Anthropic Claude 原生供应商插件。直接用�
 API Key 只写入 dsh 凭据存储（默认引用名 `ANTHROPIC_API_KEY`），不进入 `cordis.patch.yml`。插件显式传入凭据，不会读取容器里的 `ANTHROPIC_*` 环境变量或 `ant auth` 配置。
 
 YAML 示例：[中转站](examples/relay.yaml)、[进阶字段](examples/advanced.yaml)。`headers`、逐模型 `betas` 与 `extraBody`（如 `speed`、`task_budget`、`inference_geo`、`context_management`）只在 YAML 中编辑，界面保存时保留不变。合并到既有插件条目即可，不要覆盖整个文件。
+
+是否需要重启以安装界面提示为准。不要用 `link:`、目录依赖或模块路径把源码目录接入常用 profile。
 
 ## 已知限制
 
@@ -77,3 +89,5 @@ npm test        # 协议、rc.5 运行时、设置持久化与 jsdom 界面测�
 ```
 
 源码：`src/config.ts`（配置与预设）、`src/request.ts`（请求构造）、`src/messages.ts`（历史转换与回放）、`src/stream.ts`（流转换）、`src/adapter.ts`、`src/provider-settings.ts`（模型页 Remote）、`src/chat-controls.ts` / `src/capabilities.ts`（对话框开关与提示记录）、`src/native-file-tool.ts`（原生附加工具）、`src/client/`（界面）。
+
+发版：在 `master` 上开发和推送不会触发任何构建。改完后递增 `package.json` 版本并提交，打同名标签并推送，例如 `git tag v0.2.2 && git push origin master v0.2.2`。GitHub Actions（`.github/workflows/release.yml`）只在 `v*` 标签推送时运行：检查标签与版本一致，按 lockfile `npm ci`，由 `scripts/release.mjs` 构建、测试，在 `release` 分支上追加一个发布提交（源码加 `lib/`，去掉 `prepare`；父提交是上一个发布提交和该标签的源码提交）并推送。`release` 已有同一或更高版本时会拒绝发版。`npm run release` 可在本地对已打标签的提交生成同样的发布提交（不推送）。

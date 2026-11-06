@@ -2,7 +2,7 @@
 # 中转站：Anthropic 原生协议根地址 + Bearer 认证。API Key 请在模型页输入，
 # 只会写入 dsh 凭据存储中名为 apiKeyEnv 的条目，不会出现在此文件中。
 - id: dsh-claude-native
-  name: dsh-claude-native
+  name: '@forever-lwy/dsh-claude-native'
   config:
     claude:
       baseURL: https://relay.example.com      # 可带或不带 /v1

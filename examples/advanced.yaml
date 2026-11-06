@@ -1,7 +1,7 @@
 # 模型页不编辑的进阶字段：附加请求头、逐模型 beta 与原生请求体字段。
 # 这些字段在界面保存时保留不变。
 - id: dsh-claude-native
-  name: dsh-claude-native
+  name: '@forever-lwy/dsh-claude-native'
   config:
     claude:
       headers:

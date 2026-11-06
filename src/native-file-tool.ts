@@ -4,10 +4,9 @@ import type { FileAttachmentRef, ImageAttachmentRef, ImageMediaType } from '@dee
 import type {} from '@deepseek-ai/dsh-fs'
 import type {} from '@deepseek-ai/dsh-working-directory'
 import type {} from '@deepseek-ai/dsh-system-prompt'
-import type {} from '@deepseek-ai/dsh-ptc-runtime'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { LlmError, type ContentBlock, type GenerateOptions } from '@deepseek-ai/dsh-llm'
-import { defineTool, renderToolsSdk, renderToolsSdkPy } from '@deepseek-ai/dsh-tools'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { CLAUDE_PROVIDER, type ClaudeProfile } from './config.js'
 import { resolveCapabilities } from './capabilities.js'
@@ -82,6 +81,8 @@ export function registerNativeFileTool(ctx: Context, options: NativeFileToolOpti
     async execute({ path }, exec) {
       const agent = exec.agent
       if (!agent) throw new LlmError('原生文件附加需要当前会话中的模型调用。', 'NATIVE_FILE_AGENT_REQUIRED')
+      // Nested (run_code) results cannot carry native files to the Claude request.
+      if (exec.callId !== exec.rootCallId) throw new LlmError('原生文件附加只能由模型直接调用，不能在 run_code 程序中使用。', 'NATIVE_FILE_DIRECT_ONLY')
       exec.signal.throwIfAborted()
       const route = routeOf(agent)
       const model = eligible(agent, route.provider, route.model)
@@ -126,23 +127,9 @@ export function registerNativeFileTool(ctx: Context, options: NativeFileToolOpti
       return { version: 1 as const, kind: type.kind, name, attachment: attachment as unknown as JsonValue }
     },
   })
-  ctx.tools.register(definition)
-
-  // Filter the assembled route so a disabled conversation never sees the tool,
-  // and keep it out of the PTC SDK: nested results cannot carry native files.
-  ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
-    const assembled = await next()
-    if (!assembled.tools.some(tool => tool.name === CLAUDE_NATIVE_FILE_TOOL)) return assembled
-    const agent = context.agent
-    const route = agent ? routeOf(agent) : undefined
-    const visible = eligible(agent, assembled.variables.provider ?? route?.provider, assembled.variables.model ?? route?.model) !== undefined
-    const runtime = ctx.get('ptcRuntime')
-    const sections = runtime === undefined ? assembled.sections : assembled.sections.map(section => {
-      if (section.name !== 'tools:sdk') return section
-      const schemas = ctx.tools.schemas(context.scope).filter(schema => ![CLAUDE_NATIVE_FILE_TOOL, 'run_code'].includes(schema.name))
-        .map(schema => ({ ...schema, output: ctx.tools.get(schema.name, context.scope)!.output.schema }))
-      return { ...section, text: runtime.language === 'python' ? renderToolsSdkPy(schemas) : renderToolsSdk(schemas, runtime.programFormat) }
-    })
-    return { ...assembled, sections, tools: visible ? assembled.tools : assembled.tools.filter(tool => tool.name !== CLAUDE_NATIVE_FILE_TOOL) }
-  }, { prepend: true })
+  // 0.2.2 step admission replaces prompt filtering: a disabled conversation
+  // never sees the tool in its declarations or dispatch.
+  ctx.tools.register(definition, {
+    when: ({ agent, modelSelection }) => eligible(agent, modelSelection.provider, modelSelection.model) !== undefined,
+  })
 }

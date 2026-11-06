@@ -90,14 +90,14 @@ test('plugin registers route, directory entry, catalog and reasoning metadata', 
   assert.equal(typeof ctx.nativeClaude.client, 'function')
 })
 
-test('package bundle composes one entry and declares rc.5 compatibility', async () => {
+test('package bundle composes one entry and never gates on the dsh version', async () => {
   const directory = fileURLToPath(new URL('../', import.meta.url))
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
   const patches = bundlePatchPaths(directory, manifest.dsh.bundle).map(path => loadOverlayPatches('dsh-claude-native packaging test', path))
   const entries = composeEntries(patches)
   assert.equal(entries.length, 1)
   assert.equal(entries[0].id, 'dsh-claude-native')
-  assert.equal(evaluatePluginCompatibility(manifest, {}, '0.2.1-rc.5'), undefined)
+  for (const runtime of ['0.2.1-rc.5', '0.2.2-rc.1', '0.3.0-alpha.1', '1.0.0']) assert.equal(evaluatePluginCompatibility(manifest, {}, runtime), undefined, runtime)
   assert.ok(manifest.files.includes('cordis.patch.yml'))
 })
 

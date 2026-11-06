@@ -36,9 +36,9 @@ export function apply(ctx: Context, config: Config): void {
   registerNativeFileBridge(ctx)
   new ClaudeNativeService(ctx, adapter)
   let controls: ClaudeChatControls | undefined
-  ctx.inject(['sessionProjections', 'sessionController', 'sessions', 'typert'], chatCtx => {
-    controls = registerClaudeChatControls(chatCtx, profile)
+  ctx.inject(['sessionProjections', 'sessionController', 'sessionPersistence', 'sessions', 'typert'], async chatCtx => {
     chatCtx.effect(() => () => { controls = undefined })
+    controls = await registerClaudeChatControls(chatCtx, profile)
   })
   ctx.inject(['tools', 'fs', 'workingDirectory', 'systemPrompt'], toolCtx => {
     registerNativeFileTool(toolCtx, { profile, choices: (session, model) => controls?.choicesFor(session, model) })

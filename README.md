@@ -1,6 +1,6 @@
 # dsh-claude-native
 
-DeepSeek Harness（dsh）`0.2.1-rc.5` 的 Anthropic Claude 原生供应商插件。直接用官方 `@anthropic-ai/sdk`（固定 `0.137.0`）调用 Messages API 流式接口，在 **设置 → 模型** 的 **Claude（原生）** 卡片中配置连接、模型容量与思考档位。适用于官方 API，也适用于提供 Anthropic 原生协议的中转站。
+DeepSeek Harness（dsh）的 Anthropic Claude 原生供应商插件。直接用官方 `@anthropic-ai/sdk`（固定 `0.137.0`）调用 Messages API 流式接口，在 **设置 → 模型** 的 **Claude（原生）** 卡片中配置连接、模型容量与思考档位。适用于官方 API，也适用于提供 Anthropic 原生协议的中转站。
 
 ## 为什么不用内置的自定义供应商
 
@@ -47,7 +47,7 @@ DeepSeek Harness（dsh）`0.2.1-rc.5` 的 Anthropic Claude 原生供应商插件
 
 ## 安装与测试
 
-按部署约定，不自动安装。构建好的版本包位于宿主机 `plugins/releases/dsh-claude-native-<版本>.tgz`。在 dsh 的 **插件 → 添加插件** 中输入容器路径（例如 `/plugins/releases/dsh-claude-native-0.2.0.tgz`）并确认安装。之后每个版本使用新的版本号和文件名。
+按部署约定，不自动安装。构建好的版本包位于宿主机 `plugins/releases/dsh-claude-native-<版本>.tgz`。在 dsh 的 **插件 → 添加插件** 中输入容器路径（例如 `/plugins/releases/dsh-claude-native-0.2.1.tgz`）并确认安装。之后每个版本使用新的版本号和文件名。
 
 安装后在 **设置 → 模型** 找到 **Claude（原生）**，点击 **配置 Claude 提供商**：
 
@@ -62,11 +62,11 @@ YAML 示例：[中转站](examples/relay.yaml)、[进阶字段](examples/advance
 ## 已知限制
 
 - 未接入：代码执行服务端工具（Anthropic 建议不要与动态过滤版网页工具同时声明）、Files API 上传、mid-conversation system messages（dsh 未声明 in-history 更新时会把系统提示整体放在顶层）、服务端 compaction。
-- `claude_native_attach_file` 不出现在 PTC（`run_code`）SDK 中：嵌套调用的结果无法携带原生文件。
+- `claude_native_attach_file` 只能由模型直接调用：嵌套调用的结果无法携带原生文件。dsh 0.2.2 起默认使用原生执行器；若改用 PTC 执行器（仅 `run_code` 可直接调用），该工具仍会出现在 SDK 中，但在 `run_code` 内调用会明确报错 `NATIVE_FILE_DIRECT_ONLY`，不会读取文件。
 - 非 PDF 文件仍按 dsh 默认方式提供本地路径，由模型用文件工具读取。
 - rc.5 模型页没有供应商编辑器覆盖插槽：插件用 CSS 隐藏 Claude 卡片上宿主无法使用的“编辑”按钮。宿主类名属于 rc.5，升级 dsh 后需重新核对。
 - 使用 `anthropic-version: 2023-06-01`（SDK 0.x 默认）。可在设置中改为 `2026-10-21`；该版本拒绝所有 `temperature`，插件默认也不发送。
-- 未做真实 API 调用验证；协议测试使用离线 SSE 夹具和真实 SDK、真实 rc.5 `LlmRuntime` / 设置持久化。
+- 未做真实 API 调用验证；协议测试使用离线 SSE 夹具和真实 SDK、真实 0.2.2-rc.1 `LlmRuntime` / 设置持久化。
 
 ## 开发
 

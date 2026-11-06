@@ -3,7 +3,9 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
 import { freezeMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { appendPluginRecord, pluginRecordOf, type Session, SessionId } from '@deepseek-ai/dsh-session'
-import type {} from '@deepseek-ai/dsh-session-projection'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-session-persistence'
+import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { z } from 'zod'
 import { CLAUDE_PROVIDER, type ClaudeProfile } from './config.js'
@@ -22,9 +24,6 @@ declare module '@deepseek-ai/cordis' { interface Context { nativeClaudeChat: Cla
 declare module '@deepseek-ai/dsh-session' {
   interface PluginRecordMap { 'plugin:dsh-claude-native/chat-controls': Preferences }
 }
-declare module '@deepseek-ai/dsh-session-projection/types' {
-  interface SessionProjectionStateMap { claudeNativeChat: Preferences }
-}
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     'claude-native-user': { kind: 'user'; claudeNative: ClaudeChatSourceSnapshot }
@@ -41,10 +40,14 @@ function foldPreferences(state: Preferences, event: Parameters<typeof pluginReco
 
 /** Per-session, per-model native feature switches shown beside the composer. */
 export class ClaudeChatControls extends TypertRemoteService {
-  constructor(ctx: Context, private readonly profile: () => ClaudeProfile) { super(ctx, 'nativeClaudeChat') }
+  constructor(
+    ctx: Context,
+    private readonly profile: () => ClaudeProfile,
+    private readonly preferences: ProjectionHandle<Preferences>,
+  ) { super(ctx, 'nativeClaudeChat') }
 
   private state(session: Session): Preferences {
-    const state = this.ctx.sessionProjections.stateOf(session, PROJECTION)
+    const state = this.preferences.stateOf(session)
     if (!state) throw new RemoteError('gateway/internal', 'Claude 聊天选项投影不可用。', {})
     return state
   }
@@ -64,6 +67,13 @@ export class ClaudeChatControls extends TypertRemoteService {
     return this.snapshotState(this.state(session), request)
   }
 
+  /** Read a persisted log through a read-only handle: no Agent, no ownership. */
+  private async persistedEvents(id: SessionId, signal: AbortSignal): Promise<readonly SessionEvent[]> {
+    const handle = await this.ctx.sessionPersistence.open(id, 'read', { signal })
+    try { return (await handle.read(0, undefined, { signal })).events }
+    finally { await handle.close() }
+  }
+
   private async agent(sessionId: string, signal: AbortSignal): Promise<Agent> {
     signal.throwIfAborted()
     const result = await this.ctx.sessionController.resolveAgent(SessionId(sessionId))
@@ -79,13 +89,13 @@ export class ClaudeChatControls extends TypertRemoteService {
     const id = SessionId(request.sessionId)
     const live = this.ctx.sessions.get(id)
     if (live) return this.snapshot(live, request)
-    // Opening the options UI must never resume an Agent; inspection is cold-safe.
-    const inspected = await this.ctx.sessionController.inspect(id, signal)
+    // Opening the options UI must never resume an Agent; a persistence read handle is cold-safe.
+    const persisted = await this.persistedEvents(id, signal)
     signal.throwIfAborted()
     const raced = this.ctx.sessions.get(id)
     if (raced) return this.snapshot(raced, request)
     let state: Preferences = { revision: 0, selections: [] }
-    for (const event of inspected.events) {
+    for (const event of persisted) {
       signal.throwIfAborted()
       state = foldPreferences(state, event)
     }
@@ -149,12 +159,12 @@ export class ClaudeChatControls extends TypertRemoteService {
 }
 
 /** Mount only when the normal chat/session assembly is present. */
-export function registerClaudeChatControls(ctx: Context, profile: () => ClaudeProfile): ClaudeChatControls {
-  ctx.sessionProjections.register({
+export async function registerClaudeChatControls(ctx: Context, profile: () => ClaudeProfile): Promise<ClaudeChatControls> {
+  const preferences = await ctx.sessionProjections.register({
     key: PROJECTION, stateVersion: 1, stateSchema: preferenceSchema,
     init: () => ({ revision: 0, selections: [] }), apply: foldPreferences,
   })
-  const service = new ClaudeChatControls(ctx, profile)
+  const service = new ClaudeChatControls(ctx, profile, preferences)
   ctx.typert.remotes.register(chatRemoteInfo)
   ctx.on('agent/inbox/inserted', ({ agent, message }) => service.stamp(agent, message))
   return service

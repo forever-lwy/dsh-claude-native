@@ -8,6 +8,7 @@ import { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { registerClaudeChatControls } from '../lib/chat-controls.js'
 import { readChatChoices } from '../lib/chat-remote.js'
 import { defaultProfile, presetModel } from '../lib/config.js'
@@ -20,11 +21,11 @@ const provider = 'claude-native'
 const model = 'claude-opus-5-5'
 const signal = () => new AbortController().signal
 
-function fixture() {
+async function fixture() {
   const ctx = new Context()
   new SessionStore(ctx)
   new SessionProjectionRegistry(ctx)
-  ctx.sessionProjections.register(inboxProjectionDefinition)
+  const inboxProjection = await ctx.sessionProjections.register(inboxProjectionDefinition)
   const session = ctx.sessions.create(SessionId(`claude-chat-${Math.random()}`), { seed: [] })
   const profile = defaultProfile()
   profile.models.push({ ...presetModel('claude-haiku-4-5'), webTools: 'none' })
@@ -32,17 +33,17 @@ function fixture() {
   ctx.on('session/flush', () => { flushes++ })
   ctx.provide('typert', { remotes: { register() { return async () => {} } } })
   const agent = { id: session.id, session, status: 'idle' }
-  agent.inbox = new ReactLoopInbox(ctx.sessionProjections, session, { emit() {} })
+  agent.inbox = new ReactLoopInbox(inboxProjection.readerFor(session), session, { emit() {} })
   ctx.provide('sessionController', {
     async resolveAgent(id) { return id === session.id ? { agent } : { error: new Error('wrong session') } },
-    async inspect() { throw new Error('not used') },
   })
-  const controls = registerClaudeChatControls(ctx, () => profile)
+  ctx.provide('sessionPersistence', { async open() { throw new Error('not used') } })
+  const controls = await registerClaudeChatControls(ctx, () => profile)
   return { ctx, session, agent, profile, controls, request: { sessionId: session.id, provider, model }, flushes: () => flushes }
 }
 
 test('per-session options start from provider defaults, persist durably and respect model capabilities', async () => {
-  const f = fixture()
+  const f = await fixture()
   f.profile.webFetch.enabled = true
   const before = await f.controls.get(f.request, signal())
   assert.deepEqual(before.capabilities, { nativeFiles: true, webSearch: true, webFetch: true })
@@ -61,7 +62,7 @@ test('per-session options start from provider defaults, persist durably and resp
 })
 
 test('accepted prompts are stamped with immutable choices without cancelling the pending submission', async () => {
-  const f = fixture()
+  const f = await fixture()
   await f.controls.set({ ...f.request, choices: { nativeFiles: false, webSearch: true, webFetch: false }, expectedRevision: 0 }, signal())
   const prompt = createUserMessage({ source: { kind: 'user', rpcId: 'rpc-1' }, content: [{ type: 'text', text: 'hi' }] })
   f.agent.inbox.append('next-turn', prompt)
@@ -120,11 +121,12 @@ test('PDF mode follows each originating prompt, and attach-tool results are alwa
   assert.deepEqual(types, [['text'], ['tool_use'], ['tool_result(text,document)', 'text', 'document']])
 })
 
-function toolFixture(t, { choices = { nativeFiles: true, webSearch: false, webFetch: false }, data = Buffer.from('%PDF-1.7\nraw\u0000'), path = '/workspace/report.pdf' } = {}) {
+async function toolFixture(t, { choices = { nativeFiles: true, webSearch: false, webFetch: false }, data = Buffer.from('%PDF-1.7\nraw\u0000'), path = '/workspace/report.pdf' } = {}) {
   const ctx = new Context()
   t.after(() => ctx.fiber.dispose())
   new SystemPrompt(ctx, {})
   new ToolRuntime(ctx)
+  await ctx.plugin(NativeToolExecutor)
   const entries = new Map([[path, { bytes: data, version: 'v1', type: 'file' }]])
   const reads = [], saved = []
   ctx.provide('fs', {
@@ -142,12 +144,20 @@ function toolFixture(t, { choices = { nativeFiles: true, webSearch: false, webFe
   const profile = defaultProfile()
   const agent = { options: { provider, model }, session: { id: 's', header: { cwd: '/workspace' }, requestHeader: () => ({ config: agent.options }) } }
   registerNativeFileTool(ctx, { profile: () => profile, choices: () => choices })
-  const call = (args = { path }) => ctx.tools.execute({ callId: 'c1', name: CLAUDE_NATIVE_FILE_TOOL, arguments: args, agent, signal: new AbortController().signal })
-  return { ctx, call, saved, reads, entries, agent, setChoices: value => { choices = value } }
+  // 0.2.2: resolve the step's admitted tools from the route, then run the batch.
+  const resolveTools = () => ctx.tools.resolve({ agent, modelSelection: { ...agent.options }, signal: new AbortController().signal })
+  const call = async (args = { path }) => {
+    const toolSet = await resolveTools()
+    try {
+      const batch = await ctx.tools.execute({ calls: [{ type: 'tool-call', id: 'c1', name: CLAUDE_NATIVE_FILE_TOOL, arguments: JSON.stringify(args) }], agent, signal: new AbortController().signal, toolSet })
+      return batch.results[0].result
+    } finally { toolSet.dispose() }
+  }
+  return { ctx, call, resolveTools, saved, reads, entries, agent, setChoices: value => { choices = value } }
 }
 
 test('attach tool stores exact PDF or image bytes and refuses other types, outside paths and disabled conversations', async t => {
-  const f = toolFixture(t)
+  const f = await toolFixture(t)
   const result = await f.call()
   assert.equal(result.isError, false, JSON.stringify(result.content))
   assert.equal(result.content[0].type, 'file')
@@ -168,11 +178,14 @@ test('attach tool stores exact PDF or image bytes and refuses other types, outsi
   assert.equal(f.saved.length, 2)
 })
 
-test('real rc.5 assembly shows the attach tool only while native files are on for a Claude route', async t => {
+test('step admission shows the attach tool only while native files are on for a Claude route', async t => {
   const { defineTool } = await import('@deepseek-ai/dsh-tools')
-  const f = toolFixture(t)
+  const f = await toolFixture(t)
   f.ctx.tools.register(defineTool({ name: 'unrelated', description: 'Unrelated', parameters: {}, output: { schema: { type: 'boolean' }, render: () => [] }, async execute() { return true } }))
-  const names = async () => (await f.ctx.systemPrompt.assemble({ agent: f.agent, scope: f.agent })).tools.map(tool => tool.name)
+  const names = async () => {
+    const toolSet = await f.resolveTools()
+    try { return f.ctx.tools.schemas(f.agent, toolSet).map(tool => tool.name) } finally { toolSet.dispose() }
+  }
   assert.ok((await names()).includes(CLAUDE_NATIVE_FILE_TOOL))
   f.setChoices({ nativeFiles: false, webSearch: false, webFetch: false })
   assert.ok(!(await names()).includes(CLAUDE_NATIVE_FILE_TOOL))

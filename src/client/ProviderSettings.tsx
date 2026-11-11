@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-api-remote-access/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-models/client'
@@ -52,13 +52,26 @@ function hasInvalidNumber(value: unknown): boolean {
   return false
 }
 
+/** Set on the host's `<li>` provider row that holds this plugin's card. */
+export const NATIVE_ROW_ATTRIBUTE = 'data-dsh-claude-native-row'
+
 /** Each Models-page provider card owns its route's configuration form. */
 export function ProviderSettings(props: Props) {
   const [open, setOpen] = useState(false)
   const [visited, setVisited] = useState(false)
   const panelId = useId()
-  if (props.provider.provider !== 'claude-native') return null
-  return <div className="dsh-claude-card" data-claude-provider-card="claude-native">
+  const native = props.provider.provider === 'claude-native'
+  const cardRef = useRef<HTMLDivElement>(null)
+  // Mark the host's provider row so the stylesheet can address it without
+  // `:has()`, which made every DOM insertion on the page restyle widely.
+  useLayoutEffect(() => {
+    const row = cardRef.current?.closest('li')
+    if (!row) return
+    row.setAttribute(NATIVE_ROW_ATTRIBUTE, '')
+    return () => row.removeAttribute(NATIVE_ROW_ATTRIBUTE)
+  }, [native])
+  if (!native) return null
+  return <div ref={cardRef} className="dsh-claude-card" data-claude-provider-card="claude-native">
     <button type="button" className="dsh-claude-button" aria-expanded={open} aria-controls={panelId}
       onClick={() => { setOpen(value => !value); setVisited(true) }}>{props.t(open ? 'closeConfiguration' : 'configure')}</button>
     <div id={panelId} hidden={!open} className="dsh-claude-panel">{visited && <ProviderSettingsPage {...props}/>}</div>

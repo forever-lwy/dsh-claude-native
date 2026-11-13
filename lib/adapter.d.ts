@@ -19,6 +19,7 @@ export declare class ClaudeNativeAdapter extends LlmAdapter {
         id: string;
         name: string;
     };
+    providerRetryPolicy(provider: string): import("@deepseek-ai/dsh-llm").ResolvedRetryPolicy;
     private profile;
     listModels(provider: string): Promise<readonly LlmModelInfo[]>;
     resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;

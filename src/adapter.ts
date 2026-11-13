@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type Anthropic from '@anthropic-ai/sdk'
 import {
-  LlmAdapter, LlmError, ReasoningEffortId,
+  LlmAdapter, LlmError, ReasoningEffortId, resolveRetryPolicy,
   type GenerateOptions, type LlmModelInfo, type LlmResolvedModelInfo, type PreparedAdapterCall, type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import type { ImageAttachmentRef, ImageRequestTarget } from '@deepseek-ai/dsh-attachment'
@@ -10,7 +10,7 @@ import { CLAUDE_PROVIDER, type ClaudeModelConfig, type ClaudeProfile } from './c
 import { createClaudeClient, type ClientConstructor } from './client-factory.js'
 import { claudeError } from './errors.js'
 import { claudeImageTarget, isPdf, translateMessages } from './messages.js'
-import { buildRequest, findModel, replayPolicy } from './request.js'
+import { buildRequest, findModel, replayPolicy, selectedEffort } from './request.js'
 import { TurnAccumulator } from './stream.js'
 import { restoreNativeFiles } from './file-scope.js'
 import { latestChatChoices, usesNativeFiles } from './capabilities.js'
@@ -31,6 +31,10 @@ export class ClaudeNativeAdapter extends LlmAdapter {
   constructor(private readonly ctx: Context, private readonly options: ClaudeAdapterOptions) { super() }
 
   providerInfo(provider: string) { return { id: provider, name: 'Claude (Native)' } }
+
+  providerRetryPolicy(provider: string) {
+    return resolveRetryPolicy(provider === CLAUDE_PROVIDER ? this.options.profile().retryPolicy : undefined, 'claude-native: retryPolicy')
+  }
 
   private profile(provider: string): ClaudeProfile {
     if (provider !== CLAUDE_PROVIDER) throw new LlmError('未知的 Claude 供应商路由。', 'NO_ADAPTER')
@@ -95,8 +99,11 @@ export class ClaudeNativeAdapter extends LlmAdapter {
       const options = pdf ? restoreNativeFiles(projected, (block, source) => block.type === 'file' && isPdf(block.attachment)
         && (source.role === 'tool' && attached.has(source.toolCallId) || usesNativeFiles(source, projected))) : projected
       const client = bound ?? await this.client(profile)
+      const effort = selectedEffort(model, options.reasoningEffort)
+      const rawThinking = (model?.extraBody?.thinking ?? profile.extraBody.thinking) as { type?: string } | undefined
+      const manualThinking = effort?.thinking === 'enabled' || ((!effort || effort.thinking === 'omit') && rawThinking?.type === 'enabled')
       const conversation = await translateMessages(options, {
-        attachments: this.ctx.get('attachments'), inputTypes, policy: replayPolicy(profile, model, choices),
+        attachments: this.ctx.get('attachments'), inputTypes, policy: replayPolicy(profile, model, choices), manualThinking,
       })
       const { params } = buildRequest(profile, options, conversation, choices)
       const turn = new TurnAccumulator(options)
@@ -109,7 +116,7 @@ export class ClaudeNativeAdapter extends LlmAdapter {
         const stream = await client.beta.messages.create(request, { signal })
         outcome = yield* turn.consume(stream, signal)
         if (outcome.stopReason !== 'pause_turn') break
-        if (attempt >= MAX_PAUSE_CONTINUATIONS) throw new LlmError('Claude 服务端工具连续暂停次数过多。', 'INCOMPLETE_RESPONSE')
+        if (attempt >= MAX_PAUSE_CONTINUATIONS) throw LlmError.fromFailure({ message: 'Claude 服务端工具连续暂停次数过多。', code: 'INCOMPLETE_RESPONSE' })
         continued.push(...outcome.natives)
       }
       yield* turn.finish(outcome.stopDetails)

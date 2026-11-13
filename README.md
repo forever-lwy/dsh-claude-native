@@ -2,6 +2,8 @@
 
 DeepSeek Harness（dsh）的 Anthropic Claude 原生供应商插件。直接用官方 `@anthropic-ai/sdk`（固定 `0.137.0`）调用 Messages API 流式接口，在 **设置 → 模型** 的 **Claude（原生）** 卡片中配置连接、模型容量与思考档位。适用于官方 API，也适用于提供 Anthropic 原生协议的中转站。
 
+当前版本 `0.2.4` 针对 DSH `0.2.2-rc.3` 构建并验证。导入会话缺少原始 PDF 时发送明确的文字提示；真实读盘错误和取消仍照常报错。思考签名绑定原请求前缀，压缩或裁剪历史后移除失效签名，保留预算思考模式下尚未结束的工具轮次。重试交给 DSH 的供应商策略，可在 `claude.retryPolicy` 配置重试次数、错误码和退避。
+
 ## 为什么不用内置的自定义供应商
 
 2026-11-04 针对实际安装的 `0.2.1-rc.5` 核对（`@deepseek-ai/dsh-llm-pi-ai` + `@earendil-works/pi-ai 1.4.0`）：
@@ -78,7 +80,7 @@ YAML 示例：[中转站](examples/relay.yaml)、[进阶字段](examples/advance
 - 非 PDF 文件仍按 dsh 默认方式提供本地路径，由模型用文件工具读取。
 - rc.5 模型页没有供应商编辑器覆盖插槽：插件用 CSS 隐藏 Claude 卡片上宿主无法使用的“编辑”按钮。宿主类名属于 rc.5，升级 dsh 后需重新核对。
 - 使用 `anthropic-version: 2023-06-01`（SDK 0.x 默认）。可在设置中改为 `2026-10-21`；该版本拒绝所有 `temperature`，插件默认也不发送。
-- 未做真实 API 调用验证；协议测试使用离线 SSE 夹具和真实 SDK、真实 0.2.2-rc.1 `LlmRuntime` / 设置持久化。
+- 未做真实 API 调用验证；协议测试使用离线 SSE 夹具和真实 SDK、真实 0.2.2-rc.3 `LlmRuntime` / 设置持久化。
 
 ## 开发
 

@@ -61,7 +61,7 @@ export function claudeError(error: unknown, signal?: AbortSignal): LlmError {
       ...(error.requestID ? { requestId: ProviderRequestId(error.requestID) } : {}),
     }
     const suffix = `（${typeof error.status === 'number' ? `HTTP ${status}` : '流内错误'}${detail ? `：${detail}` : ''}）`
-    if (status === 413) return new LlmError(`Claude 请求体过大${suffix}`, 'REQUEST_TOO_LARGE', facts)
+    if (status === 413) return LlmError.fromFailure({ message: `Claude 请求体过大${suffix}`, code: 'REQUEST_TOO_LARGE', ...(facts) })
     if (isContextWindowExceededError(detail) || /prompt is too long/i.test(detail)) {
       return new LlmError(`Claude 上下文超出模型窗口（context window exceeded）${suffix}`, CONTEXT_WINDOW_EXCEEDED_CODE, facts)
     }
@@ -69,7 +69,7 @@ export function claudeError(error: unknown, signal?: AbortSignal): LlmError {
     const retry = retryAfterMs(error.headers as Headers | undefined)
     const withRetry = retry === undefined ? facts : { ...facts, providerRetryAfterMs: retry }
     if (status === 401 || status === 403) return new LlmError(`Claude 认证失败，请检查 API Key 与认证方式${suffix}`, 'AUTH', facts)
-    if (status === 404) return new LlmError(`Claude 模型或端点不存在${suffix}`, 'MODEL_NOT_FOUND', facts)
+    if (status === 404) return new LlmError(`Claude 模型或端点不存在${suffix}`, 'UNKNOWN_MODEL', facts)
     if (status === 429) return new LlmError(`Claude 请求过于频繁${suffix}`, 'RATE_LIMIT', withRetry)
     if (status === 408 || status === 504) return new LlmError(`Claude 网关超时${suffix}`, 'TIMEOUT', withRetry)
     if (status === 529) return new LlmError(`Claude 服务过载${suffix}`, 'SERVER', withRetry)

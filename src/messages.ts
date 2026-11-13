@@ -1,4 +1,5 @@
 import { LlmError } from '@deepseek-ai/dsh-llm'
+import { requestPrefixDigest, keepManualToolThinking } from './prefix-binding.js'
 import type { ContentBlock, GenerateOptions, RequestMessage } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore, FileAttachmentRef, ImageAttachmentRef, ImageRequestTarget } from '@deepseek-ai/dsh-attachment'
 import type Anthropic from '@anthropic-ai/sdk'
@@ -12,7 +13,7 @@ export type MessageParam = Anthropic.Beta.BetaMessageParam
 export const REPLAY_FORMAT = 'claude-native-v1'
 export interface ReplayEntry { native: NativeBlock[]; block: ContentBlock }
 export interface ClaudeReplay {
-  response: { format: typeof REPLAY_FORMAT; provider: string; model: string; id?: string; stopReason?: string | null; usage?: unknown }
+  response: { format: typeof REPLAY_FORMAT; provider: string; model: string; prefixDigest?: string; id?: string; stopReason?: string | null; usage?: unknown }
   blocks: ReplayEntry[]
 }
 
@@ -23,6 +24,7 @@ export interface TranslateOptions {
   attachments?: AttachmentStore
   inputTypes?: readonly ClaudeInputType[]
   policy: ReplayPolicy
+  manualThinking?: boolean
   imageTarget?: (image: ImageAttachmentRef) => ImageRequestTarget
 }
 
@@ -67,7 +69,7 @@ export function serverToolOf(block: { type: string; name?: unknown }): string | 
  * every visible block is unchanged; an edited turn degrades to plain content,
  * which is what the API expects of a history its signatures no longer cover.
  */
-function replayedBlocks(message: RequestMessage, options: GenerateOptions, policy: ReplayPolicy): Block[] | undefined {
+function replayedBlocks(message: RequestMessage, options: GenerateOptions, policy: ReplayPolicy, messageIndex: number, manualToolRound: number): Block[] | undefined {
   if (message.role !== 'assistant' || message.source.provider !== options.provider) return undefined
   const replay = message.source.replayState
   if (!isRecord(replay) || !isRecord(replay.response) || replay.response.format !== REPLAY_FORMAT) return undefined
@@ -77,6 +79,8 @@ function replayedBlocks(message: RequestMessage, options: GenerateOptions, polic
     const entry = replay.blocks[index]
     if (!isRecord(entry) || !Array.isArray(entry.native) || !entry.native.every(isRecord) || !jsonEqual(entry.block, message.content[index])) return undefined
     for (const native of entry.native as unknown as NativeBlock[]) {
+      if ((native.type === 'redacted_thinking' || native.type === 'thinking' && native.signature)
+        && messageIndex !== manualToolRound && replay.response.prefixDigest !== requestPrefixDigest(options, messageIndex)) continue
       if (native.type === 'fallback' && !policy.fallbacks) continue
       const tool = serverToolOf(native)
       if (tool !== undefined && !policy.serverTools.has(tool)) return undefined
@@ -103,8 +107,8 @@ class ToolIds {
 
 function parseArguments(value: string): Record<string, unknown> {
   let parsed: unknown
-  try { parsed = value.trim() ? JSON.parse(value) : {} } catch { throw new LlmError('工具调用参数不是有效 JSON。', 'INVALID_TOOL_CALL') }
-  if (!isRecord(parsed)) throw new LlmError('Claude 工具调用参数必须是 JSON 对象。', 'INVALID_TOOL_CALL')
+  try { parsed = value.trim() ? JSON.parse(value) : {} } catch { throw LlmError.fromFailure({ message: '工具调用参数不是有效 JSON。', code: 'INVALID_TOOL_CALL' }) }
+  if (!isRecord(parsed)) throw LlmError.fromFailure({ message: 'Claude 工具调用参数必须是 JSON 对象。', code: 'INVALID_TOOL_CALL' })
   return parsed
 }
 
@@ -130,9 +134,16 @@ export async function translateMessages(options: GenerateOptions, translate: Tra
     const variant = await attachments.readImageRequest(ref, target, signal)
     return { type: 'image', source: { type: 'base64', media_type: variant.mediaType, data: Buffer.from(variant.data).toString('base64') } }
   }
-  const document = async (ref: FileAttachmentRef): Promise<Anthropic.Beta.BetaRequestDocumentBlock> => {
+  const document = async (ref: FileAttachmentRef): Promise<Anthropic.Beta.BetaRequestDocumentBlock | Anthropic.Beta.BetaTextBlockParam> => {
     if (!attachments) throw new LlmError('Claude 文件输入需要 dsh 附件服务。', 'UNSUPPORTED_CONTENT')
-    const data = await readAll(attachments.readFileStream(ref, signal))
+    let data: Buffer
+    try { data = await readAll(attachments.readFileStream(ref, signal)) }
+    catch (error) {
+      signal?.throwIfAborted()
+      if (!(error instanceof Error) || !('code' in error)
+        || !['ATTACHMENT_NOT_FOUND', 'INVALID_ATTACHMENT_REF'].includes(String(error.code))) throw error
+      return { type: 'text', text: `File ${JSON.stringify(ref.name)} is unavailable: its original contents are not stored. Ask for a new upload if its contents are needed.` }
+    }
     if (data.subarray(0, 5).toString('latin1') !== '%PDF-') throw new LlmError(`附件 ${ref.name} 不是有效的 PDF 文件。`, 'UNSUPPORTED_CONTENT')
     return { type: 'document', title: ref.name.slice(0, 500), source: { type: 'base64', media_type: 'application/pdf', data: data.toString('base64') } }
   }
@@ -152,7 +163,8 @@ export async function translateMessages(options: GenerateOptions, translate: Tra
     else messages.push({ role, content })
   }
 
-  for (const message of options.messages) {
+  const manualToolRound = keepManualToolThinking(options, translate.manualThinking === true)
+  for (const [messageIndex, message] of options.messages.entries()) {
     signal?.throwIfAborted()
     if (message.role === 'system') {
       // Without in-history updates core sends system text up front; a later one still belongs to the operator channel.
@@ -179,7 +191,7 @@ export async function translateMessages(options: GenerateOptions, translate: Tra
       continue
     }
     if (message.role === 'assistant') {
-      const native = replayedBlocks(message, options, policy)
+      const native = replayedBlocks(message, options, policy, messageIndex, manualToolRound)
       if (native) {
         for (const block of native) if (block.type === 'tool_use') ids.map(block.id)
         push('assistant', native)

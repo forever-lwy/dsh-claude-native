@@ -75,7 +75,7 @@ export async function discoverClaudeModels(client: Anthropic, signal: AbortSigna
       if (models.length >= MAX_MODELS) break
     }
   } catch (error) {
-    if (timeout.aborted && !signal.aborted) throw new LlmError('获取 Claude 模型列表超时（30 秒）。', 'MODEL_DISCOVERY_TIMEOUT')
+    if (timeout.aborted && !signal.aborted) throw LlmError.fromFailure({ message: '获取 Claude 模型列表超时（30 秒）。', code: 'MODEL_DISCOVERY_TIMEOUT' })
     throw claudeError(error, signal)
   }
   return models

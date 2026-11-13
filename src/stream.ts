@@ -1,6 +1,7 @@
 import { LlmError, ToolCallId, type ContentBlock, type GenerateOptions, type StreamChunk, type TokenUsage } from '@deepseek-ai/dsh-llm'
 import type Anthropic from '@anthropic-ai/sdk'
 import { REPLAY_FORMAT, type ClaudeReplay, type ReplayEntry } from './messages.js'
+import { requestPrefixDigest } from './prefix-binding.js'
 
 type NativeBlock = Anthropic.Beta.BetaContentBlock
 type Event = Anthropic.Beta.BetaRawMessageStreamEvent
@@ -186,10 +187,10 @@ export class TurnAccumulator {
     if (active.kind === 'tool-call' || active.kind === 'server-tool') {
       let input: unknown = native.input ?? {}
       if (active.json.trim()) {
-        try { input = JSON.parse(active.json) } catch { throw new LlmError('Claude 返回了无法解析的工具参数（可能已被 max_tokens 截断）。', 'INVALID_TOOL_CALL') }
+        try { input = JSON.parse(active.json) } catch { throw LlmError.fromFailure({ message: 'Claude 返回了无法解析的工具参数（可能已被 max_tokens 截断）。', code: 'INVALID_TOOL_CALL' }) }
       }
       if (native.type === 'tool_use' || native.type === 'server_tool_use') {
-        if (typeof input !== 'object' || input === null || Array.isArray(input)) throw new LlmError('Claude 工具参数必须是 JSON 对象。', 'INVALID_TOOL_CALL')
+        if (typeof input !== 'object' || input === null || Array.isArray(input)) throw LlmError.fromFailure({ message: 'Claude 工具参数必须是 JSON 对象。', code: 'INVALID_TOOL_CALL' })
         native.input = input
       }
     }
@@ -227,7 +228,7 @@ export class TurnAccumulator {
     if (reason === 'refusal') {
       const details = (stopDetails ?? {}) as { category?: unknown; explanation?: unknown }
       const category = typeof details.category === 'string' ? `（${details.category}）` : ''
-      throw new LlmError(`Claude 安全分类器拒绝了此请求${category}${typeof details.explanation === 'string' ? `：${quote(details.explanation)}` : ''}`, 'CONTENT_FILTER')
+      throw LlmError.fromFailure({ message: `Claude 安全分类器拒绝了此请求${category}${typeof details.explanation === 'string' ? `：${quote(details.explanation)}` : ''}`, code: 'CONTENT_FILTER' })
     }
     if (this.sources.size) {
       const safe = (title: string) => title.replace(/[[\]<>\r\n]/g, ' ')
@@ -248,6 +249,7 @@ export class TurnAccumulator {
     const kind = reason === 'max_tokens' || reason === 'model_context_window_exceeded' ? 'max-tokens' : this.toolCalls ? 'tool-calls' : 'stop'
     const replay: ClaudeReplay = {
       response: { format: REPLAY_FORMAT, provider: this.options.provider, model: this.options.model,
+        prefixDigest: requestPrefixDigest(this.options),
         ...(this.id ? { id: this.id } : {}), stopReason: reason, usage: structuredClone(usage) },
       blocks: this.entries,
     }

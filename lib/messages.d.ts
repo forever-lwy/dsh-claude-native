@@ -14,6 +14,7 @@ export interface ClaudeReplay {
         format: typeof REPLAY_FORMAT;
         provider: string;
         model: string;
+        prefixDigest?: string;
         id?: string;
         stopReason?: string | null;
         usage?: unknown;
@@ -29,6 +30,7 @@ export interface TranslateOptions {
     attachments?: AttachmentStore;
     inputTypes?: readonly ClaudeInputType[];
     policy: ReplayPolicy;
+    manualThinking?: boolean;
     imageTarget?: (image: ImageAttachmentRef) => ImageRequestTarget;
 }
 export interface TranslatedConversation {

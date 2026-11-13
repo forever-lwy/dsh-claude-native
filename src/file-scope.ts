@@ -53,7 +53,7 @@ export function restoreNativeFiles(options: GenerateOptions, native: (block: Con
       const originalBlock = source.content[index]
       if (block.type === 'file' || !native(originalBlock, source)) return [block]
       const hint = block.type === 'text'
-        ? { ...block, text: `${block.text}\nThe original file is also attached natively below; the local path above is for file tools only.` } : block
+        ? { ...block, text: `${block.text}\nAvailable file contents are attached natively below; the local path above is for file tools only.` } : block
       return [hint, originalBlock]
     })
     changed = true

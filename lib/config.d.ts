@@ -1,5 +1,6 @@
 import type { Volatile, VolatileSnapshot } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
+import { type RetryPolicyConfig } from '@deepseek-ai/dsh-llm';
 export declare const CLAUDE_PROVIDER = "claude-native";
 export declare const DEFAULT_BASE_URL = "https://api.anthropic.com";
 export declare const MAX_TIMEOUT_MS = 2147483647;
@@ -52,6 +53,7 @@ export interface ClaudeServerTool {
 }
 export interface ClaudeProfileOptions {
     enabled: boolean;
+    retryPolicy?: RetryPolicyConfig;
     /** Credential reference, never the API key itself. */
     apiKeyEnv: string;
     authMode: 'x-api-key' | 'bearer';
@@ -93,6 +95,7 @@ export declare function defaultProfile(): ClaudeProfile;
 export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     claude: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         enabled: z<boolean, boolean, "defined">;
+        retryPolicy: z<RetryPolicyConfig>;
         apiKeyEnv: z<string, string, "defined">;
         authMode: z<"x-api-key" | "bearer", "x-api-key" | "bearer", "defined">;
         baseURL: z<string, string, "plain">;
@@ -172,6 +175,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         extraBody: z<import("@deepseek-ai/cosmokit").Dict<any, string>, import("@deepseek-ai/cosmokit").Dict<any, string>, "defined">;
     }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
         enabled: z<boolean, boolean, "defined">;
+        retryPolicy: z<RetryPolicyConfig>;
         apiKeyEnv: z<string, string, "defined">;
         authMode: z<"x-api-key" | "bearer", "x-api-key" | "bearer", "defined">;
         baseURL: z<string, string, "plain">;
@@ -253,6 +257,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
 }>>, Schemastery.ObjectT<NoInfer<{
     claude: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         enabled: z<boolean, boolean, "defined">;
+        retryPolicy: z<RetryPolicyConfig>;
         apiKeyEnv: z<string, string, "defined">;
         authMode: z<"x-api-key" | "bearer", "x-api-key" | "bearer", "defined">;
         baseURL: z<string, string, "plain">;
@@ -332,6 +337,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
         extraBody: z<import("@deepseek-ai/cosmokit").Dict<any, string>, import("@deepseek-ai/cosmokit").Dict<any, string>, "defined">;
     }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
         enabled: z<boolean, boolean, "defined">;
+        retryPolicy: z<RetryPolicyConfig>;
         apiKeyEnv: z<string, string, "defined">;
         authMode: z<"x-api-key" | "bearer", "x-api-key" | "bearer", "defined">;
         baseURL: z<string, string, "plain">;

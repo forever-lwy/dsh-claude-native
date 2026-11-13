@@ -27,7 +27,7 @@ export function unsupportedChoices(capabilities: ClaudeChatChoices, choices: Cla
 function recordedChoices(source: unknown, provider: string, model: string): ClaudeChatChoices | undefined {
   if (typeof source !== 'object' || source === null || !('claudeNative' in source)) return undefined
   const parsed = chatSourceSchema.safeParse(source.claudeNative)
-  if (!parsed.success) throw new LlmError('已记录的 Claude 原生选项无效，无法安全构建请求。', 'INVALID_NATIVE_OPTIONS')
+  if (!parsed.success) throw LlmError.fromFailure({ message: '已记录的 Claude 原生选项无效，无法安全构建请求。', code: 'INVALID_NATIVE_OPTIONS' })
   // A prompt stamped while this model was not configured grants nothing.
   return parsed.data.selections.find(item => item.provider === provider && item.model === model)?.choices ?? { ...NO_CHOICES }
 }

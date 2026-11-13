@@ -1,6 +1,6 @@
 import type { Volatile, VolatileSnapshot } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { LlmError } from '@deepseek-ai/dsh-llm'
+import { LlmError, RetryPolicySchema, resolveRetryPolicy, type RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 
 export const CLAUDE_PROVIDER = 'claude-native'
@@ -54,6 +54,7 @@ export interface ClaudeServerTool { enabled: boolean; maxUses?: number }
 
 export interface ClaudeProfileOptions {
   enabled: boolean
+  retryPolicy?: RetryPolicyConfig
   /** Credential reference, never the API key itself. */
   apiKeyEnv: string
   authMode: 'x-api-key' | 'bearer'
@@ -164,6 +165,7 @@ function profileSchema() {
   const { provider: _provider, ...defaults } = defaultProfile()
   return z.object({
     enabled: z.boolean().default(true).description('启用供应商'),
+    retryPolicy: RetryPolicySchema,
     apiKeyEnv: z.string().role('credential-ref').default(defaults.apiKeyEnv).description('API Key 凭据引用'),
     authMode: z.union(['x-api-key', 'bearer']).default('x-api-key').description('认证头：官方 x-api-key，或中转常用的 Authorization: Bearer'),
     baseURL: z.string().description('API 根地址，留空为 https://api.anthropic.com；SDK 会追加 /v1/messages'),
@@ -245,6 +247,7 @@ function validateBody(body: Record<string, unknown> | undefined): void {
 
 export function validateProfile(input: VolatileSnapshot<ClaudeProfileOptions> | ClaudeProfileOptions): ClaudeProfile {
   const profile = structuredClone({ ...input, provider: CLAUDE_PROVIDER }) as ClaudeProfile
+  resolveRetryPolicy(profile.retryPolicy, 'claude-native: retryPolicy')
   profile.models = profile.models.map(withPreset)
   credentialRef(profile.apiKeyEnv)
   normalizeBaseURL(profile.baseURL)

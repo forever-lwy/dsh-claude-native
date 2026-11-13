@@ -97,7 +97,7 @@ test('package bundle composes one entry and never gates on the dsh version', asy
   const entries = composeEntries(patches)
   assert.equal(entries.length, 1)
   assert.equal(entries[0].id, 'dsh-claude-native')
-  for (const runtime of ['0.2.1-rc.5', '0.2.2-rc.1', '0.3.0-alpha.1', '1.0.0']) assert.equal(evaluatePluginCompatibility(manifest, {}, runtime), undefined, runtime)
+  for (const runtime of ['0.2.1-rc.5', '0.2.2-rc.3', '0.3.0-alpha.1', '1.0.0']) assert.equal(evaluatePluginCompatibility(manifest, {}, runtime), undefined, runtime)
   assert.ok(manifest.files.includes('cordis.patch.yml'))
 })
 

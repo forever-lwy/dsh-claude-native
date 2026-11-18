@@ -21,7 +21,7 @@ export declare function sniffNativeType(prefix: Uint8Array): {
     kind: 'image';
     mediaType: ImageMediaType;
 } | undefined;
-/** Tool results of this tool are host-produced; their files are always sent natively. */
+/** Identify host-produced native tool results when selecting their current file route. */
 export declare function attachToolResults(options: GenerateOptions): Set<string>;
 export interface NativeFileToolOptions {
     profile: () => ClaudeProfile;

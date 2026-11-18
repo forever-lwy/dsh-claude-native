@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis';
-import type { ContentBlock, GenerateOptions, RequestMessage, StreamChunk } from '@deepseek-ai/dsh-llm';
+import type { FileBlock, GenerateOptions, RequestMessage, StreamChunk } from '@deepseek-ai/dsh-llm';
 /**
  * rc.5 projects FileBlocks to local-path text inside its adapter boundary.
  * Keep the pre-projection request in scope so the serializer can restore the
@@ -13,4 +13,4 @@ export declare function withOriginalRequest(options: GenerateOptions, next: () =
  * local-path note (kept so file tools still know where the file lives).
  * Messages are matched by stable id, or by order for anonymous inputs.
  */
-export declare function restoreNativeFiles(options: GenerateOptions, native: (block: ContentBlock, source: RequestMessage) => boolean): GenerateOptions;
+export declare function restoreNativeFiles(options: GenerateOptions, resolve: (block: FileBlock, source: RequestMessage) => Promise<'native' | 'unavailable' | undefined>): Promise<GenerateOptions>;

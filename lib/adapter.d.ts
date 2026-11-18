@@ -5,6 +5,7 @@ import type { ImageAttachmentRef, ImageRequestTarget } from '@deepseek-ai/dsh-at
 import { type ClaudeModelConfig, type ClaudeProfile } from './config.js';
 import { type ClientConstructor } from './client-factory.js';
 export interface ClaudeAdapterOptions {
+    sessionNativeFiles?: (id: NonNullable<GenerateOptions['sessionId']>) => boolean | undefined;
     profile: () => ClaudeProfile;
     resolveApiKey: (profile: ClaudeProfile) => Promise<string | undefined>;
     /** Dependency injection for offline protocol tests. */

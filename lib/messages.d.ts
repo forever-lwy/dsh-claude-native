@@ -28,6 +28,11 @@ export interface ReplayPolicy {
 }
 export interface TranslateOptions {
     attachments?: AttachmentStore;
+    documents?: ReadonlyMap<FileAttachmentRef, PdfPart>;
+    fileText?: (ref: FileAttachmentRef) => string | undefined;
+    nativeFiles?: boolean;
+    localToolImages?: ReadonlySet<string>;
+    imagePath?: (ref: ImageAttachmentRef) => string | undefined;
     inputTypes?: readonly ClaudeInputType[];
     policy: ReplayPolicy;
     manualThinking?: boolean;
@@ -47,7 +52,9 @@ export declare function serverToolOf(block: {
     type: string;
     name?: unknown;
 }): string | undefined;
-export declare function isPdf(ref: FileAttachmentRef): boolean;
+export type PdfPart = Anthropic.Beta.BetaRequestDocumentBlock | Anthropic.Beta.BetaTextBlockParam;
+export declare function pdfCandidate(ref: FileAttachmentRef): boolean;
+export declare function readPdfDocument(ref: FileAttachmentRef, attachments?: AttachmentStore, signal?: AbortSignal): Promise<PdfPart | undefined>;
 export declare function translateMessages(options: GenerateOptions, translate: TranslateOptions): Promise<TranslatedConversation>;
 /** Thinking blocks cannot carry cache_control; mark the last block that can. */
 export declare function markCacheBreakpoint(content: MessageParam['content'], cacheControl: Anthropic.Beta.BetaCacheControlEphemeral): boolean;

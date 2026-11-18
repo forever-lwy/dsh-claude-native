@@ -17,8 +17,13 @@ import {
 
 const RECORD = 'plugin:dsh-claude-native/chat-controls' as const
 const PROJECTION = 'claudeNativeChat' as const
-const preferenceSchema = z.object({ revision: z.number().int().nonnegative(), selections: z.array(chatSelectionSchema) }).strict()
+const preferenceSchema = z.object({ revision: z.number().int().nonnegative(), selections: z.array(chatSelectionSchema), nativeFiles: z.boolean().optional() }).strict()
 type Preferences = z.infer<typeof preferenceSchema>
+// Both independent plugins fold the file switch from the same session log.
+// Older saves moved the edited model to the end of their selections array.
+const peerFilePreference = z.object({
+  nativeFiles: z.boolean().optional(), selections: z.array(z.object({ choices: z.object({ nativeFiles: z.boolean() }) })),
+})
 
 declare module '@deepseek-ai/cordis' { interface Context { nativeClaudeChat: ClaudeChatControls } }
 declare module '@deepseek-ai/dsh-session' {
@@ -32,10 +37,19 @@ declare module '@deepseek-ai/dsh-llm' {
 
 function foldPreferences(state: Preferences, event: Parameters<typeof pluginRecordOf>[0]): Preferences {
   const record = pluginRecordOf(event)
+  if (record?.type === 'plugin:dsh-google-native/chat-controls') {
+    const peer = peerFilePreference.safeParse(record.data)
+    if (!peer.success) return state
+    const nativeFiles = peer.data.nativeFiles ?? peer.data.selections.at(-1)?.choices.nativeFiles
+    if (nativeFiles === undefined || nativeFiles === (state.nativeFiles ?? true)) return state
+    return { ...state, nativeFiles, revision: state.revision + 1 }
+  }
   if (record?.type !== RECORD) return state
   const parsed = preferenceSchema.safeParse(record.data)
   // Replaceable UI preferences; stamped prompts carry the authoritative immutable choices.
-  return parsed.success ? parsed.data : state
+  if (!parsed.success) return state
+  const nativeFiles = parsed.data.nativeFiles ?? parsed.data.selections.at(-1)?.choices.nativeFiles ?? state.nativeFiles ?? true
+  return { ...parsed.data, nativeFiles, revision: Math.max(state.revision + 1, parsed.data.revision) }
 }
 
 /** Per-session, per-model native feature switches shown beside the composer. */
@@ -58,7 +72,7 @@ export class ClaudeChatControls extends TypertRemoteService {
     const capabilities = resolveCapabilities(model)
     const defaults = profile && model ? defaultChoices(profile, model) : { ...NO_CHOICES }
     const remembered = state.selections.find(item => item.provider === request.provider && item.model === request.model)?.choices
-    const choices = { ...defaults, ...remembered }
+    const choices = { ...defaults, ...remembered, nativeFiles: state.nativeFiles ?? true }
     for (const key of CHAT_KEYS) choices[key] = choices[key] && capabilities[key]
     return { provider: request.provider, model: request.model, capabilities, choices, revision: state.revision }
   }
@@ -118,7 +132,8 @@ export class ClaudeChatControls extends TypertRemoteService {
     const selections = state.selections.filter(item => item.provider !== request.provider || item.model !== request.model)
     selections.push({ provider: request.provider, model: request.model, choices: request.choices })
     signal.throwIfAborted()
-    appendPluginRecord(agent.session, RECORD, { revision: state.revision + 1, selections })
+    const nativeFiles = before.capabilities.nativeFiles ? request.choices.nativeFiles : state.nativeFiles ?? true
+    appendPluginRecord(agent.session, RECORD, { revision: state.revision + 1, selections, nativeFiles })
     // Acknowledgement means preferences reached the normal durability checkpoint.
     await this.ctx.sessions.flush(agent.session)
     signal.throwIfAborted()
@@ -130,6 +145,8 @@ export class ClaudeChatControls extends TypertRemoteService {
     return this.snapshot(session, { provider: CLAUDE_PROVIDER, model }).choices
   }
 
+  nativeFilesFor(session: Session): boolean { return this.state(session).nativeFiles ?? true }
+
   capture(session: Session): ClaudeChatSourceSnapshot {
     const selections: ClaudeChatSourceSnapshot['selections'] = []
     const profile = this.profile()
@@ -138,7 +155,7 @@ export class ClaudeChatControls extends TypertRemoteService {
       try { choices = this.choicesFor(session, model.id) } catch { choices = { ...NO_CHOICES } }
       selections.push({ provider: CLAUDE_PROVIDER, model: model.id, choices })
     }
-    return { version: 1, selections }
+    return { version: 1, selections, nativeFiles: this.nativeFilesFor(session) }
   }
 
   stamp(agent: Agent, message: UserMessage): void {
@@ -161,7 +178,7 @@ export class ClaudeChatControls extends TypertRemoteService {
 /** Mount only when the normal chat/session assembly is present. */
 export async function registerClaudeChatControls(ctx: Context, profile: () => ClaudeProfile): Promise<ClaudeChatControls> {
   const preferences = await ctx.sessionProjections.register({
-    key: PROJECTION, stateVersion: 1, stateSchema: preferenceSchema,
+    key: PROJECTION, stateVersion: 2, stateSchema: preferenceSchema,
     init: () => ({ revision: 0, selections: [] }), apply: foldPreferences,
   })
   const service = new ClaudeChatControls(ctx, profile, preferences)

@@ -52,6 +52,7 @@ export declare const chatSourceSchema: z.ZodObject<{
             webFetch: z.ZodBoolean;
         }, z.core.$strict>;
     }, z.core.$strict>>;
+    nativeFiles: z.ZodOptional<z.ZodBoolean>;
 }, z.core.$strict>;
 export type ClaudeChatSourceSnapshot = z.infer<typeof chatSourceSchema>;
 export declare const chatSnapshotSchema: z.ZodObject<{

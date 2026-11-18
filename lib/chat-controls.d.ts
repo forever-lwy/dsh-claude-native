@@ -18,6 +18,7 @@ declare const preferenceSchema: z.ZodObject<{
             webFetch: z.ZodBoolean;
         }, z.core.$strict>;
     }, z.core.$strict>>;
+    nativeFiles: z.ZodOptional<z.ZodBoolean>;
 }, z.core.$strict>;
 type Preferences = z.infer<typeof preferenceSchema>;
 declare module '@deepseek-ai/cordis' {
@@ -53,6 +54,7 @@ export declare class ClaudeChatControls extends TypertRemoteService {
     set(request: ClaudeChatSetRequest, signal: AbortSignal): Promise<ClaudeChatSnapshot>;
     /** Current choices for this session's models, used when the active route is known. */
     choicesFor(session: Session, model: string): ClaudeChatChoices;
+    nativeFilesFor(session: Session): boolean;
     capture(session: Session): ClaudeChatSourceSnapshot;
     stamp(agent: Agent, message: UserMessage): void;
 }

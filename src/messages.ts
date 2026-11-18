@@ -1,4 +1,5 @@
-import { LlmError } from '@deepseek-ai/dsh-llm'
+import { fileHandleText, LlmError } from '@deepseek-ai/dsh-llm'
+import { extname } from 'node:path'
 import { requestPrefixDigest, keepManualToolThinking } from './prefix-binding.js'
 import type { ContentBlock, GenerateOptions, RequestMessage } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore, FileAttachmentRef, ImageAttachmentRef, ImageRequestTarget } from '@deepseek-ai/dsh-attachment'
@@ -22,6 +23,11 @@ export interface ReplayPolicy { serverTools: ReadonlySet<string>; fallbacks: boo
 
 export interface TranslateOptions {
   attachments?: AttachmentStore
+  documents?: ReadonlyMap<FileAttachmentRef, PdfPart>
+  fileText?: (ref: FileAttachmentRef) => string | undefined
+  nativeFiles?: boolean
+  localToolImages?: ReadonlySet<string>
+  imagePath?: (ref: ImageAttachmentRef) => string | undefined
   inputTypes?: readonly ClaudeInputType[]
   policy: ReplayPolicy
   manualThinking?: boolean
@@ -112,13 +118,33 @@ function parseArguments(value: string): Record<string, unknown> {
   return parsed
 }
 
-async function readAll(stream: AsyncIterable<Uint8Array>): Promise<Buffer> {
-  const chunks: Buffer[] = []
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk))
-  return Buffer.concat(chunks)
-}
+export type PdfPart = Anthropic.Beta.BetaRequestDocumentBlock | Anthropic.Beta.BetaTextBlockParam
+export function pdfCandidate(ref: FileAttachmentRef): boolean { return !extname(ref.name) || /\.pdf$/i.test(ref.name) }
 
-export function isPdf(ref: FileAttachmentRef): boolean { return /\.pdf$/i.test(ref.name) }
+export async function readPdfDocument(ref: FileAttachmentRef, attachments?: AttachmentStore, signal?: AbortSignal): Promise<PdfPart | undefined> {
+  if (!attachments) throw new LlmError('Claude 文件输入需要 dsh 附件服务。', 'UNSUPPORTED_CONTENT')
+  const chunks: Uint8Array[] = []
+  const signature = Buffer.from('%PDF-')
+  let matched = 0
+  try {
+    for await (const chunk of attachments.readFileStream(ref, signal)) {
+      signal?.throwIfAborted()
+      if (matched < signature.length) {
+        const prefix = chunk.subarray(0, signature.length - matched)
+        if (!signature.subarray(matched, matched + prefix.length).equals(prefix)) return undefined
+        matched += prefix.length
+      }
+      chunks.push(chunk)
+    }
+  } catch (error) {
+    signal?.throwIfAborted()
+    if (!(error instanceof Error) || !('code' in error)
+      || !['ATTACHMENT_NOT_FOUND', 'INVALID_ATTACHMENT_REF'].includes(String(error.code))) throw error
+    return { type: 'text', text: `File ${JSON.stringify(ref.name)} is unavailable: its original contents are not stored. Ask for a new upload if its contents are needed.` }
+  }
+  if (matched !== signature.length) return undefined
+  return { type: 'document', title: ref.name.slice(0, 500), source: { type: 'base64', media_type: 'application/pdf', data: Buffer.concat(chunks).toString('base64') } }
+}
 
 export async function translateMessages(options: GenerateOptions, translate: TranslateOptions): Promise<TranslatedConversation> {
   const { attachments, policy } = translate
@@ -134,26 +160,18 @@ export async function translateMessages(options: GenerateOptions, translate: Tra
     const variant = await attachments.readImageRequest(ref, target, signal)
     return { type: 'image', source: { type: 'base64', media_type: variant.mediaType, data: Buffer.from(variant.data).toString('base64') } }
   }
-  const document = async (ref: FileAttachmentRef): Promise<Anthropic.Beta.BetaRequestDocumentBlock | Anthropic.Beta.BetaTextBlockParam> => {
-    if (!attachments) throw new LlmError('Claude 文件输入需要 dsh 附件服务。', 'UNSUPPORTED_CONTENT')
-    let data: Buffer
-    try { data = await readAll(attachments.readFileStream(ref, signal)) }
-    catch (error) {
-      signal?.throwIfAborted()
-      if (!(error instanceof Error) || !('code' in error)
-        || !['ATTACHMENT_NOT_FOUND', 'INVALID_ATTACHMENT_REF'].includes(String(error.code))) throw error
-      return { type: 'text', text: `File ${JSON.stringify(ref.name)} is unavailable: its original contents are not stored. Ask for a new upload if its contents are needed.` }
-    }
-    if (data.subarray(0, 5).toString('latin1') !== '%PDF-') throw new LlmError(`附件 ${ref.name} 不是有效的 PDF 文件。`, 'UNSUPPORTED_CONTENT')
-    return { type: 'document', title: ref.name.slice(0, 500), source: { type: 'base64', media_type: 'application/pdf', data: data.toString('base64') } }
-  }
   const placeholder = (block: ContentBlock): Anthropic.Beta.BetaTextBlockParam => ({ type: 'text', text:
     block.type === 'image' ? `[图片 ${block.attachment.name ?? block.attachment.attachmentId}${block.offloaded ? ' 已移出上下文' : ' 未发送：模型未声明图片输入'}]`
       : block.type === 'file' ? `[文件 ${block.attachment.name} 未以原生格式发送]` : '' })
   /** User-side media: native when the model accepts it, otherwise a visible placeholder. */
   const media = async (block: ContentBlock): Promise<ToolResultContent | undefined> => {
     if (block.type === 'image') return block.offloaded || !accepts('image') ? placeholder(block) : image(block.attachment)
-    if (block.type === 'file') return isPdf(block.attachment) && accepts('pdf') ? document(block.attachment) : placeholder(block)
+    if (block.type === 'file') {
+      const ref = block.attachment
+      const document = translate.documents?.get(ref) ?? (translate.nativeFiles !== false && pdfCandidate(ref) && accepts('pdf')
+        ? await readPdfDocument(ref, attachments, signal) : undefined)
+      return document ?? { type: 'text', text: translate.fileText?.(ref) ?? fileHandleText(ref, undefined) }
+    }
     return undefined
   }
   const push = (role: 'user' | 'assistant', content: Block[]): void => {
@@ -181,6 +199,11 @@ export async function translateMessages(options: GenerateOptions, translate: Tra
       const content: ToolResultContent[] = []
       for (const block of message.content) {
         if (block.type === 'text' || block.type === 'reasoning') { if (block.text) content.push({ type: 'text', text: block.text }) }
+        else if (block.type === 'image' && translate.localToolImages?.has(message.toolCallId)) {
+          const path = translate.imagePath?.(block.attachment)
+          content.push({ type: 'text', text: path ? `Read the normalized image with local file tools at ${JSON.stringify(path)} (read-only).`
+            : `Image ${JSON.stringify(block.attachment.name ?? block.attachment.attachmentId)} has no readable local path in this environment.` })
+        }
         else {
           const part = await media(block)
           if (part) content.push(part)

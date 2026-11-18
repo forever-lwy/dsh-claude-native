@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { posix } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
-import { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
+import { appendPluginRecord, SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
@@ -41,6 +41,30 @@ async function fixture() {
   const controls = await registerClaudeChatControls(ctx, () => profile)
   return { ctx, session, agent, profile, controls, request: { sessionId: session.id, provider, model }, flushes: () => flushes }
 }
+
+test('the shared file preference migrates the last legacy save, survives a cold read, and leaves other sessions independent', async () => {
+  const f = await fixture()
+  const next = { ...f.request, provider: 'claude-native', model: 'claude-haiku-4-5' }
+  const peer = { provider: 'google-ai-studio', model: 'gemini-3.8-flash', choices: { nativeFiles: false, search: true, maps: false, codeExecution: false, urlContext: false } }
+  const record = 'plugin:dsh-google-native/chat-controls'
+  appendPluginRecord(f.session, record, { revision: 3, selections: [peer] })
+  const off = await f.controls.get(next, signal())
+  assert.equal(off.choices.nativeFiles, false)
+  assert.equal(off.revision, 1)
+  const here = await f.controls.get(f.request, signal())
+  assert.equal(here.choices.nativeFiles, false)
+  const on = await f.controls.set({ ...f.request, choices: { ...here.choices, nativeFiles: true }, expectedRevision: here.revision }, signal())
+  assert.equal(on.choices.nativeFiles, true)
+  assert.equal((await f.controls.get(next, signal())).choices.nativeFiles, true)
+  appendPluginRecord(f.session, record, { revision: 4, nativeFiles: false, selections: [peer] })
+  await assert.rejects(f.controls.set({ ...f.request, choices: on.choices, expectedRevision: on.revision }, signal()),
+    err => err.code === 'native-claude/conflict')
+  const saved = JSON.parse(JSON.stringify(f.session.snapshotEvents()))
+  f.ctx.sessionPersistence.open = async () => ({ read: async () => ({ events: saved }), close: async () => {} })
+  assert.deepEqual(await f.controls.get({ ...next, sessionId: 'cold' }, signal()), await f.controls.get(next, signal()))
+  const unrelated = await fixture()
+  assert.equal((await unrelated.controls.get(unrelated.request, signal())).choices.nativeFiles, true)
+})
 
 test('per-session options start from provider defaults, persist durably and respect model capabilities', async () => {
   const f = await fixture()
@@ -100,7 +124,7 @@ test('the newest prompt decides web tools, overriding provider defaults in both 
   assert.deepEqual(body.messages[1], { role: 'assistant', content: [{ type: 'text', text: 'found' }] }, 'server-tool history degrades once the tool is off')
 })
 
-test('PDF mode follows each originating prompt, and attach-tool results are always native', async () => {
+test('local-only PDF uploads retain their mode alongside native uploads and enabled attach-tool results', async () => {
   const pdf = Buffer.from('%PDF-1.7\nbytes')
   const attachments = { fileHostPath: () => undefined, async *readFileStream() { yield pdf } }
   const server = fakeServer(response([{ type: 'text', text: 'ok' }]))
@@ -109,6 +133,8 @@ test('PDF mode follows each originating prompt, and attach-tool results are alwa
   const call = ToolCallId('toolu_attach')
   const original = { provider, model, messages: [
     stampedUser({ nativeFiles: false, webSearch: false, webFetch: false }, [file('local.pdf', 'a')], 'u1'),
+    { id: 'u-google', role: 'user', source: { kind: 'user', googleNative: { version: 1, selections: [], nativeFiles: false } },
+      content: [file('local-before-claude-install.pdf', 'd')] },
     { id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: call, name: CLAUDE_NATIVE_FILE_TOOL, arguments: '{"path":"x.pdf"}' }], source: { kind: 'model', provider: 'other', model: 'm' } },
     { id: 't1', role: 'tool', toolCallId: call, content: [file('x.pdf', 'b')], source: { kind: 'tool', callId: call } },
     stampedUser({ nativeFiles: true, webSearch: false, webFetch: false }, [file('native.pdf', 'c')], 'u2'),
@@ -118,7 +144,7 @@ test('PDF mode follows each originating prompt, and attach-tool results are alwa
   for await (const _ of withOriginalRequest(original, () => adapter.stream(projected))) { /* drain */ }
   const messages = server.requests[0].body.messages
   const types = messages.map(message => message.content.map(block => block.type === 'tool_result' ? `tool_result(${block.content.map(part => part.type)})` : block.type))
-  assert.deepEqual(types, [['text'], ['tool_use'], ['tool_result(text,document)', 'text', 'document']])
+  assert.deepEqual(types, [['text', 'text'], ['tool_use'], ['tool_result(text,document)', 'text', 'document']])
 })
 
 async function toolFixture(t, { choices = { nativeFiles: true, webSearch: false, webFetch: false }, data = Buffer.from('%PDF-1.7\nraw\u0000'), path = '/workspace/report.pdf' } = {}) {
@@ -156,7 +182,7 @@ async function toolFixture(t, { choices = { nativeFiles: true, webSearch: false,
   return { ctx, call, resolveTools, saved, reads, entries, agent, setChoices: value => { choices = value } }
 }
 
-test('attach tool stores exact PDF or image bytes and refuses other types, outside paths and disabled conversations', async t => {
+test('attach tool stores exact PDF or image bytes and returns a local path for other types and enforces workspace and session settings', async t => {
   const f = await toolFixture(t)
   const result = await f.call()
   assert.equal(result.isError, false, JSON.stringify(result.content))
@@ -168,7 +194,9 @@ test('attach tool stores exact PDF or image bytes and refuses other types, outsi
   assert.equal(image.content[0].type, 'image')
   assert.equal(f.saved[1].mediaType, 'image/png')
   f.entries.set('/workspace/notes.txt', { bytes: Buffer.from('hello'), version: 'v1', type: 'file' })
-  assert.equal((await f.call({ path: 'notes.txt' })).isError, true)
+  const local = await f.call({ path: 'notes.txt' })
+  assert.equal(local.isError, false)
+  assert.match(local.content[0].text, /built-in file tools.*notes\.txt/)
   f.entries.set('/outside/secret.pdf', { bytes: Buffer.from('%PDF-'), version: 'v1', type: 'file' })
   const reads = f.reads.length
   assert.equal((await f.call({ path: '/outside/secret.pdf' })).isError, true)

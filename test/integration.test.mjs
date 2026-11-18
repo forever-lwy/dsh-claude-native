@@ -16,12 +16,15 @@ import * as ClaudePlugin from '../lib/index.js'
 import { collect, fakeServer, response } from './helpers.mjs'
 import { realSettingsProfile } from './helpers/real-settings-profile.mjs'
 
-function runtimeFixture(server, bytes) {
+function runtimeFixture(server, bytes, sessionNativeFiles) {
   const ctx = new Context()
   new LlmRuntime(ctx)
-  ctx.provide('attachments', { fileHostPath: () => undefined, async *readFileStream() { yield bytes } })
+  ctx.provide('attachments', { fileHostPath: ref => `/host/${ref.name}`, async *readFileStream(ref) {
+    yield typeof bytes === 'function' ? bytes(ref) : bytes
+  } })
+  ctx.provide('fs', { processPathFromHostPath: path => path.replace('/host/', '/readonly/') })
   let profile = defaultProfile()
-  const adapter = new ClaudeNativeAdapter(ctx, { profile: () => profile, resolveApiKey: async () => 'sk-test-only',
+  const adapter = new ClaudeNativeAdapter(ctx, { profile: () => profile, sessionNativeFiles, resolveApiKey: async () => 'sk-test-only',
     createClient: options => new Anthropic({ ...options, fetch: server.fetch }) })
   ctx.llm.registerAdapter(['claude-native'], adapter)
   registerNativeFileBridge(ctx)
@@ -51,11 +54,46 @@ test('bridge leaves non-PDF files as core text and skips models without PDF inpu
   const projected = { ...original, messages: projectFilesToText(original.messages, () => '/read-only/x') }
   let restored
   for await (const _ of withOriginalRequest(original, async function* () {
-    restored = restoreNativeFiles(projected, block => block.type === 'file' && block.attachment.name.endsWith('.pdf'))
+    restored = await restoreNativeFiles(projected, async block => block.attachment.name.endsWith('.pdf') ? 'native' : undefined)
     yield { type: 'finish', reason: { kind: 'stop' } }
   })) { /* drain */ }
   assert.deepEqual(restored.messages[0].content.map(block => block.type), ['text', 'text', 'file'])
-  assert.equal(restoreNativeFiles(projected, () => true), projected, 'outside the scope nothing is restored')
+  assert.equal(await restoreNativeFiles(projected, async () => 'native'), projected, 'outside the scope nothing is restored')
+})
+
+test('Word, a mislabeled PDF and a valid PDF take independent routes across replies, model switches and retry', async () => {
+  const server = fakeServer(...Array.from({ length: 4 }, () => response([{ type: 'text', text: 'ok' }])))
+  const pdf = Buffer.from('%PDF-1.7\nreadable')
+  const word = Buffer.from('504b03041400', 'hex')
+  const reads = []
+  let enabled = true
+  const f = runtimeFixture(server, ref => {
+    reads.push(ref.name)
+    return ref.name === 'paper.pdf' ? pdf : word
+  }, () => enabled)
+  const provider = 'claude-native'
+  const model = f.profile().models[0].id
+  const next = 'second-claude'
+  f.profile().models.push({ id: next, inputTypes: ['text', 'image', 'pdf'] })
+  const origin = createUserMessage({ source: { kind: 'user', claudeNative: { version: 1, nativeFiles: true, selections: [] } },
+    content: ['report.docx', 'bad.pdf', 'paper.pdf'].map((name, i) => ({
+    type: 'file', attachment: { name, attachmentId: String(i).repeat(64), bytes: name === 'paper.pdf' ? pdf.length : word.length },
+  })) })
+  const messages = [origin]
+  for (const route of [model, model, next, next]) {
+    if (server.requests.length === 2) enabled = false
+    const result = await collect(f.ctx.llm.stream({ provider, model: route, sessionId: 'word-history', messages }))
+    assert.equal(result.at(-1).reason.kind, 'stop')
+    const content = server.requests.at(-1).body.messages.flatMap(item => item.content)
+    assert.deepEqual(content.filter(part => part.type === 'document').map(part => part.title), enabled ? ['paper.pdf'] : [])
+    for (const name of ['report.docx', 'bad.pdf']) {
+      const local = content.find(part => part.text?.includes('/readonly/' + name))
+      assert.ok(local)
+      assert.doesNotMatch(local.text, /attached natively/)
+    }
+    if (server.requests.length === 1) messages.push(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'Continue' }] }))
+  }
+  assert.deepEqual(reads, ['bad.pdf', 'paper.pdf', 'bad.pdf', 'paper.pdf'])
 })
 
 test('actual rc.5 prepared call keeps its captured Claude generation across edits', async () => {

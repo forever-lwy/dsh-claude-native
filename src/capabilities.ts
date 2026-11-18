@@ -28,8 +28,8 @@ function recordedChoices(source: unknown, provider: string, model: string): Clau
   if (typeof source !== 'object' || source === null || !('claudeNative' in source)) return undefined
   const parsed = chatSourceSchema.safeParse(source.claudeNative)
   if (!parsed.success) throw LlmError.fromFailure({ message: '已记录的 Claude 原生选项无效，无法安全构建请求。', code: 'INVALID_NATIVE_OPTIONS' })
-  // A prompt stamped while this model was not configured grants nothing.
-  return parsed.data.selections.find(item => item.provider === provider && item.model === model)?.choices ?? { ...NO_CHOICES }
+  const choices = parsed.data.selections.find(item => item.provider === provider && item.model === model)?.choices ?? NO_CHOICES
+  return { ...choices, nativeFiles: parsed.data.nativeFiles ?? choices.nativeFiles }
 }
 
 /** The newest human prompt owns this turn; an older prompt's switches are never carried forward. */
@@ -46,6 +46,8 @@ export function latestChatChoices(options: GenerateOptions): ClaudeChatChoices |
 
 /** Upload mode belongs to the originating prompt, including after resume or a later toggle. Unstamped history stays native. */
 export function usesNativeFiles(message: RequestMessage, options: GenerateOptions): boolean {
+  const peer = message.source && 'googleNative' in message.source ? message.source.googleNative : undefined
+  if (peer && typeof peer === 'object' && 'nativeFiles' in peer && peer.nativeFiles === false) return false
   return recordedChoices(message.source, options.provider, options.model)?.nativeFiles
     ?? latestChatChoices(options)?.nativeFiles ?? true
 }

@@ -5,11 +5,11 @@ import {
   LlmAdapter, LlmError, ReasoningEffortId, resolveRetryPolicy,
   type GenerateOptions, type LlmModelInfo, type LlmResolvedModelInfo, type PreparedAdapterCall, type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
-import type { ImageAttachmentRef, ImageRequestTarget } from '@deepseek-ai/dsh-attachment'
+import type { FileAttachmentRef, ImageAttachmentRef, ImageRequestTarget } from '@deepseek-ai/dsh-attachment'
 import { CLAUDE_PROVIDER, type ClaudeModelConfig, type ClaudeProfile } from './config.js'
 import { createClaudeClient, type ClientConstructor } from './client-factory.js'
 import { claudeError } from './errors.js'
-import { claudeImageTarget, isPdf, translateMessages } from './messages.js'
+import { claudeImageTarget, pdfCandidate, readPdfDocument, translateMessages, type PdfPart } from './messages.js'
 import { buildRequest, findModel, replayPolicy, selectedEffort } from './request.js'
 import { TurnAccumulator } from './stream.js'
 import { restoreNativeFiles } from './file-scope.js'
@@ -17,6 +17,7 @@ import { latestChatChoices, usesNativeFiles } from './capabilities.js'
 import { attachToolResults } from './native-file-tool.js'
 
 export interface ClaudeAdapterOptions {
+  sessionNativeFiles?: (id: NonNullable<GenerateOptions['sessionId']>) => boolean | undefined
   profile: () => ClaudeProfile
   resolveApiKey: (profile: ClaudeProfile) => Promise<string | undefined>
   /** Dependency injection for offline protocol tests. */
@@ -92,18 +93,32 @@ export class ClaudeNativeAdapter extends LlmAdapter {
       signal?.throwIfAborted()
       const model = findModel(profile, projected.model)
       const inputTypes = model?.inputTypes
-      const pdf = inputTypes === undefined || inputTypes.includes('pdf')
-      // The newest human prompt's stamp decides this turn's switches; each file keeps its own prompt's mode.
       const choices = latestChatChoices(projected)
+      const sessionFiles = projected.sessionId === undefined ? undefined : this.options.sessionNativeFiles?.(projected.sessionId)
+      const nativeFiles = model !== undefined && sessionFiles !== false && choices?.nativeFiles !== false
+      const pdf = nativeFiles && (inputTypes === undefined || inputTypes.includes('pdf'))
       const attached = attachToolResults(projected)
-      const options = pdf ? restoreNativeFiles(projected, (block, source) => block.type === 'file' && isPdf(block.attachment)
-        && (source.role === 'tool' && attached.has(source.toolCallId) || usesNativeFiles(source, projected))) : projected
+      const documents = new Map<FileAttachmentRef, PdfPart>()
+      const attachments = this.ctx.get('attachments')
+      const options = pdf ? await restoreNativeFiles(projected, async (block, source) => {
+        if (!pdfCandidate(block.attachment) || !(source.role === 'tool' && attached.has(source.toolCallId) || usesNativeFiles(source, projected))) return
+        const document = documents.get(block.attachment) ?? await readPdfDocument(block.attachment, attachments, signal)
+        if (!document) return
+        documents.set(block.attachment, document)
+        return document.type === 'document' ? 'native' : 'unavailable'
+      }) : projected
       const client = bound ?? await this.client(profile)
       const effort = selectedEffort(model, options.reasoningEffort)
       const rawThinking = (model?.extraBody?.thinking ?? profile.extraBody.thinking) as { type?: string } | undefined
       const manualThinking = effort?.thinking === 'enabled' || ((!effort || effort.thinking === 'omit') && rawThinking?.type === 'enabled')
       const conversation = await translateMessages(options, {
-        attachments: this.ctx.get('attachments'), inputTypes, policy: replayPolicy(profile, model, choices), manualThinking,
+        attachments, documents, nativeFiles, fileText: ref => this.ctx.get('llm')?.fileRequestText(ref),
+        localToolImages: nativeFiles ? undefined : attached,
+        imagePath: ref => {
+          const path = attachments?.imageHostPath(ref)
+          return path && this.ctx.get('fs')?.processPathFromHostPath(path)
+        },
+        inputTypes, policy: replayPolicy(profile, model, choices), manualThinking,
       })
       const { params } = buildRequest(profile, options, conversation, choices)
       const turn = new TurnAccumulator(options)

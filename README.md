@@ -2,7 +2,9 @@
 
 DeepSeek Harness（dsh）的 Anthropic Claude 原生供应商插件。直接用官方 `@anthropic-ai/sdk`（固定 `0.137.0`）调用 Messages API 流式接口，在 **设置 → 模型** 的 **Claude（原生）** 卡片中配置连接、模型容量与思考档位。适用于官方 API，也适用于提供 Anthropic 原生协议的中转站。
 
-当前版本 `0.2.4` 针对 DSH `0.2.2-rc.3` 构建并验证。导入会话缺少原始 PDF 时发送明确的文字提示；真实读盘错误和取消仍照常报错。思考签名绑定原请求前缀，压缩或裁剪历史后移除失效签名，保留预算思考模式下尚未结束的工具轮次。重试交给 DSH 的供应商策略，可在 `claude.retryPolicy` 配置重试次数、错误码和退避。
+当前版本 `0.2.5` 的文件开关跟随会话，关闭后可以直接重试带附件的历史消息。Word 等不支持的文件交给内置文件工具。
+
+`0.2.4` 针对 DSH `0.2.2-rc.3` 构建并验证。导入会话缺少原始 PDF 时发送明确的文字提示；真实读盘错误和取消仍照常报错。思考签名绑定原请求前缀，压缩或裁剪历史后移除失效签名，保留预算思考模式下尚未结束的工具轮次。重试交给 DSH 的供应商策略，可在 `claude.retryPolicy` 配置重试次数、错误码和退避。
 
 ## 为什么不用内置的自定义供应商
 
@@ -41,8 +43,8 @@ DeepSeek Harness（dsh）的 Anthropic Claude 原生供应商插件。直接用�
 - **错误**：`prompt is too long` → `CONTEXT_WINDOW_EXCEEDED`（触发 dsh 压缩）；429 → `RATE_LIMIT`（带 retry-after）；5xx / 529 / 流内 overloaded → `SERVER`；连接失败 → `TRANSPORT`；这些可由 dsh-llm-retry 重试。错误信息附带上游的错误类型与说明（不含密钥），便于排查中转站问题。
 - **模型发现**：“从上游获取模型”调用 `GET /v1/models`，读取 `max_input_tokens`、`max_tokens` 与 thinking / effort / 图片 / PDF 能力树。
 - **采样参数**：当前模型拒绝 `temperature`；只对声明了 `sampling` 的旧模型且思考关闭时转发。
-- **对话框中的原生能力开关**：聊天输入框左侧的 **原生能力** 按钮（与 Gemini 插件一致），按“会话 + 模型”保存，发送后的提示会记录当时的选择：
-  - **文件使用模型原生能力**：新上传的 PDF 作为原生 `document` 块发送；同时向模型提供 `claude_native_attach_file` 工具，可把工作区内的 PDF 或 PNG/JPEG/GIF/WebP 图片原样附加到当前对话（按文件头识别类型，不解析、不 OCR；PDF ≤ 20 MiB、图片 ≤ 10 MiB，仅限会话工作区）。关闭后 PDF 走本地路径与文件工具，工具也从模型可见列表中移除。之前发送的文件保留原来的方式。
+- **对话框中的原生能力开关**位于聊天输入框左侧。文件开关在同一会话的 Claude、Google AI Studio 和 Vertex 模型间共用。网页搜索和网页抓取继续按会话及模型保存。
+  - **文件使用模型原生能力**打开时，符合文件头且模型支持的 PDF 作为原生文档发送，Word 等其他文档保留 dsh 的本地只读路径。模型也可以用 `claude_native_attach_file` 附加工作区内的 PDF（≤ 20 MiB）或 PNG、JPEG、GIF、WebP 图片（≤ 10 MiB）。遇到其他格式时工具返回工作区路径。关闭开关后，后续请求和重试均使用内置文件处理，原生工具从列表移除。此前在关闭状态下提交的文件继续使用本地路径。[Anthropic 文件类型](https://platform.claude.com/docs/en/build-with-claude/files#file-types-and-content-blocks)
   - **网页搜索 / 网页读取**：覆盖模型页的默认值；仅对“网页工具”不为“无”的模型显示。关闭后，历史中的服务端工具块退化为普通文本再发送。
   - 回复进行中不可修改；保存期间会暂时阻止发送，保证下一条提示使用新选择。
 - **宿主插件 API**：`await ctx.nativeClaude.client()` 返回按当前配置构造的官方 SDK 客户端（batches、count_tokens、files 等）。

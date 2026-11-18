@@ -18,7 +18,7 @@ export type ClaudeChatSetRequest = z.infer<typeof chatSetRequestSchema>
 
 export const chatSelectionSchema = chatRouteSchema.extend({ choices: chatChoicesSchema }).strict()
 /** Immutable copy carried on each accepted user prompt; it decides that turn's native features. */
-export const chatSourceSchema = z.object({ version: z.literal(1), selections: z.array(chatSelectionSchema) }).strict()
+export const chatSourceSchema = z.object({ version: z.literal(1), selections: z.array(chatSelectionSchema), nativeFiles: z.boolean().optional() }).strict()
 export type ClaudeChatSourceSnapshot = z.infer<typeof chatSourceSchema>
 
 export const chatSnapshotSchema = chatRouteSchema.extend({

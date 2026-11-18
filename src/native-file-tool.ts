@@ -32,7 +32,7 @@ export function sniffNativeType(prefix: Uint8Array): { kind: 'pdf' } | { kind: '
   return undefined
 }
 
-/** Tool results of this tool are host-produced; their files are always sent natively. */
+/** Identify host-produced native tool results when selecting their current file route. */
 export function attachToolResults(options: GenerateOptions): Set<string> {
   const calls = new Set<string>()
   for (const message of options.messages) {
@@ -70,11 +70,11 @@ export function registerNativeFileTool(ctx: Context, options: NativeFileToolOpti
     description: 'Attach one existing workspace PDF or image (PNG, JPEG, GIF, WebP) to this SAME conversation so the current Claude model can read its ORIGINAL content natively (PDF pages, charts, scans, screenshots). The file is not parsed, OCRed or summarized. After success, inspect the attached file in your next response. For plain text or source code, read the file with normal file tools instead.',
     parameters: { path: { type: 'string', required: true, description: 'Existing file path, absolute or relative to the current working directory, inside the session workspace.' } },
     output: {
-      schema: { type: 'object', additionalProperties: false, properties: {
+      schema: { oneOf: [{ type: 'object', additionalProperties: false, properties: {
         version: { type: 'integer', const: 1, required: true }, kind: { type: 'string', enum: ['pdf', 'image'], required: true },
         name: { type: 'string', required: true }, attachment: { type: 'json', required: true },
-      } },
-      render: (_args, value) => [value.kind === 'image'
+      } }, { type: 'string' }] },
+      render: (_args, value) => typeof value === 'string' ? [{ type: 'text', text: value }] : [value.kind === 'image'
         ? { type: 'image', attachment: value.attachment as unknown as ImageAttachmentRef }
         : { type: 'file', attachment: value.attachment as unknown as FileAttachmentRef }] as ContentBlock[],
     },
@@ -97,10 +97,12 @@ export function registerNativeFileTool(ctx: Context, options: NativeFileToolOpti
       const before = await ctx.fs.stat(target, exec.signal)
       if (!before || before.type !== 'file') throw LlmError.fromFailure({ message: '附加目标必须是现有的普通文件。', code: 'NATIVE_FILE_NOT_REGULAR' })
       const prefix = await ctx.fs.readByteRange(target, { offset: 0, length: 16 }, exec.signal)
+      exec.signal.throwIfAborted()
       const type = sniffNativeType(prefix)
-      if (!type) throw LlmError.fromFailure({ message: '只能原生附加 PDF 或 PNG/JPEG/GIF/WebP 图片；文本文件请直接用文件工具读取。', code: 'UNSUPPORTED_NATIVE_FILE' })
       const inputs = model.inputTypes ?? ['text', 'image', 'pdf']
-      if (!inputs.includes(type.kind)) throw LlmError.fromFailure({ message: `当前模型未声明 ${type.kind === 'pdf' ? 'PDF' : '图片'} 输入。`, code: 'UNSUPPORTED_NATIVE_CAPABILITY' })
+      if (!type || !inputs.includes(type.kind)) {
+        return `Use the built-in file tools to read the existing workspace file at ${JSON.stringify(target.displayPath)}.`
+      }
       const maxBytes = type.kind === 'pdf' ? MAX_NATIVE_PDF_BYTES : MAX_NATIVE_IMAGE_BYTES
       if (before.size !== undefined && before.size > maxBytes) throw LlmError.fromFailure({ message: `文件超过原生附加上限 ${maxBytes / MiB} MiB。`, code: 'FILE_TOO_LARGE' })
       const chunks: Uint8Array[] = []

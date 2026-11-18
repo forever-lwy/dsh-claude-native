@@ -25,7 +25,14 @@ export const inject = ['llm', 'attachments']
 export function apply(ctx: Context, config: Config): void {
   const profile = () => profileOf(config)
   profile()
-  const adapter = new ClaudeNativeAdapter(ctx, { profile, resolveApiKey: current => resolveClaudeApiKey(ctx, current) })
+  let controls: ClaudeChatControls | undefined
+  const adapter = new ClaudeNativeAdapter(ctx, {
+    sessionNativeFiles: id => {
+      const session = ctx.get('sessions')?.get(id)
+      return session && controls?.nativeFilesFor(session)
+    },
+    profile, resolveApiKey: current => resolveClaudeApiKey(ctx, current),
+  })
   // The route stays owned while disabled; the adapter then lists no models and refuses dispatch.
   const registration = ctx.llm.registerAdapter([CLAUDE_PROVIDER], adapter)
   const settingsNs = ctx.fiber.entry?.options.id ?? name
@@ -35,7 +42,6 @@ export function apply(ctx: Context, config: Config): void {
   }])
   registerNativeFileBridge(ctx)
   new ClaudeNativeService(ctx, adapter)
-  let controls: ClaudeChatControls | undefined
   ctx.inject(['sessionProjections', 'sessionController', 'sessionPersistence', 'sessions', 'typert'], async chatCtx => {
     chatCtx.effect(() => () => { controls = undefined })
     controls = await registerClaudeChatControls(chatCtx, profile)
